@@ -303,14 +303,40 @@ attr_value() {
     [[ -n "$line" ]] && awk '{print $4}' <<<"$line"
 }
 
+smart_raw_column() {
+    awk '
+        /^[[:space:]]*ID#[[:space:]]+ATTRIBUTE_NAME/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "RAW_VALUE") {
+                    print i
+                    exit
+                }
+            }
+        }
+    ' "$SMART_REPORT"
+}
+
 ## ATT QNT DE LINHAS
 attr_raw_number() {
     local id="${1:-}"
     shift || true
 
-    local line
+    local line raw_column
     line="$(attr_line "$id" "$@")"
-    [[ -n "$line" ]] && awk '{print $10}' <<<"$line" | grep -oE '^[0-9]+' || true
+    [[ -n "$line" ]] || return 0
+
+    raw_column="$(smart_raw_column)"
+    if [[ "$raw_column" =~ ^[0-9]+$ ]]; then
+        awk -v start="$raw_column" '{
+            for (i = start; i <= NF; i++) {
+                if ($i ~ /^[0-9]+/) {
+                    match($i, /^[0-9]+/)
+                    print substr($i, RSTART, RLENGTH)
+                    exit
+                }
+            }
+        }' <<<"$line"
+    fi
 }
 
 
@@ -318,10 +344,16 @@ attr_raw_full() {
     local id="${1:-}"
     shift || true
 
-    local line
+    local line raw_column
     line="$(attr_line "$id" "$@")"
     if [[ -n "$line" ]]; then
-        awk '{for (i=10; i<=NF; i++) printf "%s%s", $i, (i<NF ? OFS : ORS)}' <<<"$line"
+        raw_column="$(smart_raw_column)"
+        if [[ "$raw_column" =~ ^[0-9]+$ ]]; then
+            awk -v start="$raw_column" '{
+                for (i = start; i <= NF; i++)
+                    printf "%s%s", $i, (i < NF ? OFS : ORS)
+            }' <<<"$line"
+        fi
     fi
 }
 
