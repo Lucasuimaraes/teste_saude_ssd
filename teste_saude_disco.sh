@@ -250,22 +250,36 @@ attr_line() {
     local line=""
     local attribute_name=""
 
-    if [[ "$id" =~ ^[0-9]+$ ]] && (( id > 0 )); then
+    # O nome confirma a semantica do atributo. O ID fica como fallback,
+    # porque alguns fabricantes reutilizam o mesmo ID para finalidades diferentes.
+    for attribute_name in "$@"; do
+        line="$(awk -v wanted_name="$attribute_name" '
+            $2 == wanted_name {print; exit}
+        ' "$SMART_REPORT")"
+        [[ -n "$line" ]] && break
+    done
+
+    if [[ -z "$line" ]] && [[ "$id" =~ ^[0-9]+$ ]] && (( id > 0 )); then
         line="$(awk -v wanted="$id" '
             $1 ~ /^[0-9]+$/ && ($1 + 0) == (wanted + 0) {print; exit}
         ' "$SMART_REPORT")"
     fi
 
-    if [[ -z "$line" ]]; then
-        for attribute_name in "$@"; do
-            line="$(awk -v wanted_name="$attribute_name" '
-                $2 == wanted_name {print; exit}
-            ' "$SMART_REPORT")"
-            [[ -n "$line" ]] && break
-        done
-    fi
-
     [[ -n "$line" ]] && printf '%s\n' "$line"
+}
+
+attr_line_by_name() {
+    local attribute_name line
+
+    for attribute_name in "$@"; do
+        line="$(awk -v wanted_name="$attribute_name" '
+            $2 == wanted_name {print; exit}
+        ' "$SMART_REPORT")"
+        if [[ -n "$line" ]]; then
+            printf '%s\n' "$line"
+            return 0
+        fi
+    done
 }
 
 ## ATT DO VALOR
@@ -327,18 +341,41 @@ human_written() {
     }'
 }
 
+# CONVERTE CONTADORES DO FABRICANTE EXPRESSOS EM BLOCOS DE 32 MIB
+human_written_mib() {
+    local blocks="${1:-0}"
+    awk -v b="$blocks" 'BEGIN {
+        bytes = b * 33554432
+        printf "%.2f TB (%.2f TiB)", bytes / 1000000000000, bytes / 1099511627776
+    }'
+}
+
 # PRINTA ATTRS DO DISCO
 print_attr() {
     local id="$1"
     local label="$2"
     local normalized raw
 
-    normalized="$(attr_value "$id")"
-    raw="$(attr_raw_full "$id")"
+    shift 2
+    normalized="$(attr_value "$id" "$@")"
+    raw="$(attr_raw_full "$id" "$@")"
 
     if [[ -n "$normalized" || -n "$raw" ]]; then
         printf '  %-31s valor=%-4s bruto=%s\n' "$label (ID $id):" "${normalized:--}" "${raw:--}"
     fi
+}
+
+print_attr_by_name() {
+    local label="$1"
+    shift
+    local line normalized raw id
+
+    line="$(attr_line_by_name "$@")"
+    [[ -n "$line" ]] || return 0
+    id="$(awk '{print $1}' <<<"$line")"
+    normalized="$(awk '{print $4}' <<<"$line")"
+    raw="$(awk '{for (i=10; i<=NF; i++) printf "%s%s", $i, (i<NF ? OFS : ORS)}' <<<"$line")"
+    printf '  %-31s valor=%-4s bruto=%s\n' "$label (ID $id):" "${normalized:--}" "${raw:--}"
 }
 
 # CRIA O REPORT DA PASTA DE LOGS
@@ -392,6 +429,10 @@ show_health_and_attributes() {
     local reallocated program_fail erase_fail reported pending offline crc temp
     local power_hours power_cycles unexpected_loss life_remaining life_used
     local avg_erase reserve lbas sector_size latest_test
+    local raw_reallocated raw_program_fail raw_erase_fail raw_reported raw_pending
+    local raw_offline raw_crc raw_temp raw_power_hours raw_power_cycles
+    local raw_unexpected_loss raw_avg_erase raw_reserve raw_lbas
+    local life_line life_name life_raw host_writes host_reads
 
     health="$(grep -Ei 'SMART overall-health self-assessment test result:|SMART Health Status:' "$SMART_REPORT" | head -n1 | sed -E 's/^[^:]+:[[:space:]]*//' || true)"
     smart_available="$(grep -F 'SMART support is: Available' "$SMART_REPORT" | head -n1 || true)"
@@ -410,46 +451,69 @@ show_health_and_attributes() {
         add_warning "Não foi possível identificar o resultado geral do SMART."
     fi
 
-    # O ID é a chave principal; os nomes abaixo são aliases de segurança.
-    # Assim, mudanças na ordem da tabela não alteram o resultado e pequenas
-    # diferenças de nomenclatura entre versões do smartmontools têm fallback.
-    reallocated="$(to_integer "$(attr_raw_number 5 Reallocate_NAND_Blk_Cnt Reallocated_Sector_Ct)")"
-    program_fail="$(to_integer "$(attr_raw_number 171 Program_Fail_Count Program_Fail_Cnt_Total)")"
-    erase_fail="$(to_integer "$(attr_raw_number 172 Erase_Fail_Count Erase_Fail_Count_Total)")"
-    reported="$(to_integer "$(attr_raw_number 187 Reported_Uncorrect Reported_Uncorrectable_Errors)")"
-    pending="$(to_integer "$(attr_raw_number 197 Current_Pending_ECC_Cnt Current_Pending_Sector)")"
-    offline="$(to_integer "$(attr_raw_number 198 Offline_Uncorrectable)")"
-    crc="$(to_integer "$(attr_raw_number 199 UDMA_CRC_Error_Count)")"
-    temp="$(to_integer "$(attr_raw_number 194 Temperature_Celsius)")"
-    power_hours="$(to_integer "$(attr_raw_number 9 Power_On_Hours)")"
-    power_cycles="$(to_integer "$(attr_raw_number 12 Power_Cycle_Count)")"
-    unexpected_loss="$(to_integer "$(attr_raw_number 174 Unexpect_Power_Loss_Ct Unexpected_Power_Loss_Ct)")"
-    avg_erase="$(to_integer "$(attr_raw_number 173 Ave_Block-Erase_Count Average_Block_Erase_Count)")"
-    reserve="$(to_integer "$(attr_raw_number 180 Unused_Reserve_NAND_Blk Unused_Reserve_NAND_Blocks)")"
-    life_remaining="$(to_integer "$(attr_value 202 Percent_Lifetime_Remain)")"
-    life_used="$(to_integer "$(attr_raw_number 202 Percent_Lifetime_Remain)")"
-    lbas="$(attr_raw_number 246 Total_LBAs_Written)"
-    lbas="${lbas:-0}"
+    # Os nomes confirmam a semantica; o ID e usado como fallback.
+    # Assim, mudancas na ordem da tabela nao alteram o resultado e IDs
+    # reutilizados por fabricantes diferentes nao recebem rotulos incorretos.
+    raw_reallocated="$(attr_raw_number 5 Reallocate_NAND_Blk_Cnt Reallocated_Sector_Ct)"
+    raw_program_fail="$(attr_raw_number 171 Program_Fail_Count Program_Fail_Cnt_Total)"
+    raw_erase_fail="$(attr_raw_number 172 Erase_Fail_Count Erase_Fail_Count_Total)"
+    raw_reported="$(attr_raw_number 187 Reported_Uncorrect Reported_Uncorrectable_Errors)"
+    raw_pending="$(attr_raw_number 197 Current_Pending_ECC_Cnt Current_Pending_Sector)"
+    raw_offline="$(attr_raw_number 198 Offline_Uncorrectable)"
+    raw_crc="$(attr_raw_number 199 UDMA_CRC_Error_Count)"
+    raw_temp="$(attr_raw_number 194 Temperature_Celsius)"
+    raw_power_hours="$(attr_raw_number 9 Power_On_Hours)"
+    raw_power_cycles="$(attr_raw_number 12 Power_Cycle_Count)"
+    raw_unexpected_loss="$(attr_raw_number 174 Unexpect_Power_Loss_Ct Unexpected_Power_Loss_Ct)"
+    raw_avg_erase="$(attr_raw_number 173 Ave_Block-Erase_Count Average_Block_Erase_Count)"
+    raw_reserve="$(attr_raw_number 180 Unused_Reserve_NAND_Blk Unused_Reserve_NAND_Blocks Unused_Rsvd_Blk_Cnt_Tot)"
+    raw_lbas="$(attr_raw_number 246 Total_LBAs_Written)"
+
+    reallocated="$(to_integer "$raw_reallocated")"
+    program_fail="$(to_integer "$raw_program_fail")"
+    erase_fail="$(to_integer "$raw_erase_fail")"
+    reported="$(to_integer "$raw_reported")"
+    pending="$(to_integer "$raw_pending")"
+    offline="$(to_integer "$raw_offline")"
+    crc="$(to_integer "$raw_crc")"
+    temp="$(to_integer "$raw_temp")"
+    power_hours="$(to_integer "$raw_power_hours")"
+    power_cycles="$(to_integer "$raw_power_cycles")"
+    unexpected_loss="$(to_integer "$raw_unexpected_loss")"
+    avg_erase="$(to_integer "$raw_avg_erase")"
+    reserve="$(to_integer "$raw_reserve")"
+    lbas="$raw_lbas"
+    life_line="$(attr_line_by_name Percent_Lifetime_Remain Remaining_Lifetime_Perc SSD_Life_Left)"
+    life_name="$(awk '{print $2}' <<<"$life_line")"
+    life_remaining="$(awk '{print $4}' <<<"$life_line" | grep -oE '^[0-9]+' || true)"
+    [[ -n "$life_remaining" ]] && life_remaining="$(to_integer "$life_remaining")"
+    life_raw="$(awk '{print $10}' <<<"$life_line" | grep -oE '^[0-9]+' || true)"
+    life_used=""
+    [[ "$life_name" == "Percent_Lifetime_Remain" ]] && life_used="$life_raw"
+    host_writes="$(attr_raw_number 241 Host_Writes_32MiB)"
+    host_reads="$(attr_raw_number 242 Host_Reads_32MiB)"
     sector_size="$(grep -E '^Sector Size:' "$SMART_REPORT" | grep -oE '[0-9]+ bytes logical' | grep -oE '^[0-9]+' | head -n1 || true)"
     sector_size="${sector_size:-512}"
 
     print_header "PRINCIPAIS INDICADORES DO SSD"
-    printf '  Horas ligado:                 %s h (%s)\n' "$power_hours" "$(human_power_hours "$power_hours")"
-    printf '  Ciclos de energia:            %s\n' "$power_cycles"
-    printf '  Perdas inesperadas de energia:%s\n' " $unexpected_loss"
-    printf '  Temperatura atual:            %s °C\n' "$temp"
-    printf '  Vida útil restante:           %s %%\n' "$life_remaining"
-    printf '  Desgaste informado (RAW):     %s %%\n' "$life_used"
-    printf '  Média de apagamentos/bloco:   %s\n' "$avg_erase"
-    printf '  Blocos NAND de reserva:       %s\n' "$reserve"
-    printf '  Total gravado:                %s\n' "$(human_written "$lbas" "$sector_size")"
-    printf '  Blocos NAND realocados:       %s\n' "$reallocated"
-    printf '  Falhas de programação:        %s\n' "$program_fail"
-    printf '  Falhas de apagamento:         %s\n' "$erase_fail"
-    printf '  Erros não corrigíveis:        %s\n' "$reported"
-    printf '  Setores/ECC pendentes:        %s\n' "$pending"
-    printf '  Offline não corrigível:       %s\n' "$offline"
-    printf '  Erros CRC SATA:               %s\n' "$crc"
+    [[ -n "$raw_power_hours" ]] && printf '  Horas ligado:                 %s h (%s)\n' "$power_hours" "$(human_power_hours "$power_hours")"
+    [[ -n "$raw_power_cycles" ]] && printf '  Ciclos de energia:            %s\n' "$power_cycles"
+    [[ -n "$raw_unexpected_loss" ]] && printf '  Perdas inesperadas de energia:%s\n' " $unexpected_loss"
+    [[ -n "$raw_temp" ]] && printf '  Temperatura atual:            %s °C\n' "$temp"
+    [[ -n "$life_remaining" ]] && printf '  Vida útil restante:           %s %%\n' "$life_remaining"
+    [[ -n "$life_used" ]] && printf '  Desgaste informado (RAW):     %s %%\n' "$life_used"
+    [[ -n "$raw_avg_erase" ]] && printf '  Média de apagamentos/bloco:   %s\n' "$avg_erase"
+    [[ -n "$raw_reserve" ]] && printf '  Blocos NAND de reserva:       %s\n' "$reserve"
+    [[ -n "$lbas" ]] && printf '  Total gravado:                %s\n' "$(human_written "$lbas" "$sector_size")"
+    [[ -n "$host_writes" ]] && printf '  Escrita do host:              %s\n' "$(human_written_mib "$host_writes")"
+    [[ -n "$host_reads" ]] && printf '  Leitura do host:              %s\n' "$(human_written_mib "$host_reads")"
+    [[ -n "$raw_reallocated" ]] && printf '  Blocos NAND realocados:       %s\n' "$reallocated"
+    [[ -n "$raw_program_fail" ]] && printf '  Falhas de programação:        %s\n' "$program_fail"
+    [[ -n "$raw_erase_fail" ]] && printf '  Falhas de apagamento:         %s\n' "$erase_fail"
+    [[ -n "$raw_reported" ]] && printf '  Erros não corrigíveis:        %s\n' "$reported"
+    [[ -n "$raw_pending" ]] && printf '  Setores/ECC pendentes:        %s\n' "$pending"
+    [[ -n "$raw_offline" ]] && printf '  Offline não corrigível:       %s\n' "$offline"
+    [[ -n "$raw_crc" ]] && printf '  Erros CRC SATA:               %s\n' "$crc"
 
     (( reallocated > 0 )) && add_warning "$reallocated bloco(s) NAND realocado(s). Verifique se o valor está aumentando."
     (( program_fail > 0 )) && add_critical "$program_fail falha(s) de programação NAND."
@@ -481,7 +545,7 @@ show_health_and_attributes() {
     print_attr 197 "ECC/setores pendentes" Current_Pending_ECC_Cnt Current_Pending_Sector
     print_attr 198 "Offline não corrigível" Offline_Uncorrectable
     print_attr 199 "Erros CRC SATA" UDMA_CRC_Error_Count
-    print_attr 202 "Vida útil restante" Percent_Lifetime_Remain
+    print_attr_by_name "Vida útil restante" Percent_Lifetime_Remain Remaining_Lifetime_Perc SSD_Life_Left
     print_attr 206 "Taxa de erro de escrita" Write_Error_Rate
     print_attr 246 "LBAs gravados" Total_LBAs_Written
     print_attr 247 "Páginas programadas host" Host_Program_Page_Count
