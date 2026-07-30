@@ -207,16 +207,27 @@ prepare_smart_args() {
 }
 
 ## ENVIA PARA ARQUIVO DE LOG
+smartctl_run() {
+    # Bash antigo com `set -u` pode tratar uma matriz vazia como nao definida.
+    # So expandimos SMART_ARGS quando ela existe e possui argumentos.
+    if [[ -n "${SMART_ARGS[*]-}" ]]; then
+        smartctl "${SMART_ARGS[@]}" "$@"
+        return $?
+    fi
+
+    smartctl "$@"
+}
+
 smartctl_capture() {
     local output_file="$1"
     shift
-    smartctl "${SMART_ARGS[@]}" "$@" "$DEVICE" >"$output_file" 2>&1
+    smartctl_run "$@" "$DEVICE" >"$output_file" 2>&1
     return $?
 }
 
 ## RETORNA TEXTO
 smartctl_text() {
-    smartctl "${SMART_ARGS[@]}" "$@" "$DEVICE" 2>&1
+    smartctl_run "$@" "$DEVICE" 2>&1
     return $?
 }
 
