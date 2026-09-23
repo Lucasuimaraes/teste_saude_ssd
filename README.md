@@ -1,3 +1,16 @@
+# Ferramentas de diagnóstico Linux
+
+## Validação completa de servidores Debian 11
+
+O validador por etapas, o instalador e o manual estão em
+[validacao-servidor](validacao-servidor/README.md).
+
+Nessa pasta estão os comandos para baixar diretamente no servidor pelo GitHub,
+instalar como root, executar os testes e atualizar versões. Os relatórios são
+gerados localmente no servidor e não são enviados ao repositório.
+
+---
+
 Teste de Saúde de Disco com SMART
 
 Script Bash para coletar, analisar e registrar informações de saúde de discos ATA/SATA, incluindo HDDs e SSDs

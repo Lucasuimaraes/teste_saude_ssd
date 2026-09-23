@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.log
+*.tar.gz
+relatorios/
+logs/
+smoke-validacao/
+RESUMO.txt
+RELATORIO_COMPLETO.txt
+resultados.tsv
+comandos.txt
+temperatura_memoria.tsv
+nic-*-antes.tsv
+nic-*-depois.tsv

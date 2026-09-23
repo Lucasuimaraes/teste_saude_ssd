@@ -1,0 +1,474 @@
+MANUAL DE USO — SCRIPT DE VALIDAÇÃO DE SERVIDORES
+Versão do script: 1.1.0
+Arquivo: validar-servidor.sh
+Destino: Debian 11, Bash, SSD e HD SATA (/dev/sda, /dev/sdb etc.).
+Todos os comandos deste manual devem ser executados diretamente como root.
+
+1. O QUE O SCRIPT FAZ
+
+Executa as 11 etapas do manual em sequência e salva tudo no próprio servidor:
+
+  1 — Hardware: temperatura, CPU/RAM, memtester, SMART, espaço e I/O.
+  2 — Rede onboard/offboard: driver, link, velocidade, erros, ping, DNS e iperf opcional.
+  3 — CPU: modelo, frequência disponível e amostras de utilização.
+  4 — Memória: módulos, slots, utilização e memtester.
+  5 — Disco: SMART completo, autoteste curto acompanhado e benchmark de leitura.
+  6 — Logs: kernel, journal e eventos selecionados de hardware.
+  7 — Serviços: unidades com falha, status geral e consultas ao Asterisk.
+  8 — Rede: rotas, regras, DNS, endereços, portas e firewall (somente leitura).
+  9 — Hora: timezone e estado de sincronismo NTP.
+ 10 — Sistema: identificação, kernel, versão, reinicializações e discos.
+ 11 — Stress adicional: CPU, RAM, escrita em arquivo, logs/SMART/serviços finais.
+
+As ferramentas ausentes e os testes omitidos ficam registrados. Uma falha em
+um comando não impede as demais coletas. Alertas críticos bloqueiam novas cargas.
+Memtester não é repetido na etapa 4 se já foi tentado na etapa 1.
+
+O script NÃO aprova automaticamente o servidor. Entrega evidências e sinalizações
+para revisão do técnico. Serviços ativos não comprovam que a telefonia funciona.
+Não cria chamadas, não testa áudio/RTP, URA, filas ou transferências sozinho.
+
+2. ANTES DE EXECUTAR
+
+- Confirme backup e janela de manutenção para o modo completo.
+- Execute primeiro em uma máquina de testes, depois no servidor de entrega.
+- Não use stress durante chamadas ou em servidor de produção sem manutenção.
+- Tenha acesso de console/gerenciamento para eventual travamento.
+- Certifique-se de que o local dos relatórios possui espaço livre.
+- Confirme o disco e as interfaces. SSD/HD SATA normalmente aparecem como /dev/sdX.
+
+Comandos de identificação:
+
+  lsblk -d -o NAME,MODEL,SERIAL,SIZE,TYPE,ROTA
+  lsblk -f
+  findmnt -no SOURCE /
+  ip -br link
+
+Selecione o DISCO INTEIRO: /dev/sda. Não use /dev/sda1.
+O padrão é /dev/sda; caso não exista, ele será apontado e seus testes omitidos.
+Não existe suporte automático a RAID que exija parâmetros especiais do smartctl,
+NVMe ou adaptadores USB que necessitem configuração explícita do controlador.
+
+3. BAIXAR DO GITHUB E INSTALAR DIRETAMENTE NO SERVIDOR
+
+Projeto público:
+https://github.com/Lucasuimaraes/teste_saude_ssd/tree/master/validacao-servidor
+
+Você pode compartilhar esse link com outros técnicos. Para baixar, não é preciso
+ter conta/token GitHub nem manter seu computador ligado. O servidor precisa
+conseguir acessar o GitHub por HTTPS. Os testes continuam sendo executados
+localmente, e os relatórios não são enviados ao GitHub.
+
+Na sessão root do SERVIDOR, execute, conferindo o resultado de cada comando:
+
+  apt-get update && apt-get install -y git ca-certificates
+  git clone --branch master https://github.com/Lucasuimaraes/teste_saude_ssd.git /opt/teste_saude_ssd
+  bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
+
+Se um comando falhar, corrija antes de continuar. Se /opt/teste_saude_ssd já for
+um clone desse repositório, use a seção 3.1. Não apague uma pasta existente.
+
+O instalador verifica a sintaxe e instala:
+- Script: /usr/local/sbin/validar-servidor
+- Manual: /usr/local/share/doc/validar-servidor/MANUAL_USO_VALIDAR_SERVIDOR.txt
+- Backup anterior: /usr/local/share/validar-servidor/backups/ (se já instalado).
+
+O instalador não baixa código, não inicia testes e não instala dependências.
+Ele usa os arquivos do clone que você acabou de baixar. A instalação das
+dependências é feita separadamente, na seção 4.
+
+Verifique a versão e as opções:
+
+  /usr/local/sbin/validar-servidor --versao
+  /usr/local/sbin/validar-servidor --ajuda
+
+3.1 ATUALIZAR PELO GITHUB
+
+Quando houver uma nova versão, execute no servidor, fora de uma rodada de testes:
+
+  git -C /opt/teste_saude_ssd pull --ff-only && bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
+  /usr/local/sbin/validar-servidor --versao
+
+O operador && evita instalar se o Git falhar. A branch usada é master.
+O comando atualiza o clone e a cópia instalada; apenas git pull não atualiza
+/usr/local/sbin/validar-servidor. Os relatórios anteriores são preservados.
+Se você editou arquivos localmente, salve/revise suas mudanças caso o Git aponte
+conflito. Não use reset --hard para resolver sem analisar.
+
+3.2 TRANSFERÊNCIA MANUAL (SE O SERVIDOR NÃO ACESSA O GITHUB)
+
+Baixe os arquivos pelo GitHub em outro computador, transfira por SCP/SFTP e
+mantenha instalar.sh, validar-servidor.sh e este manual na mesma pasta.
+Na sessão root, nessa pasta, execute:
+
+  bash instalar.sh
+
+Isso instala os arquivos locais. As dependências ainda precisam estar disponíveis
+nos repositórios da máquina ou ter sido instaladas previamente.
+
+4. INSTALAR AS DEPENDÊNCIAS
+
+Este comando só instala ferramentas. Não inicia a validação:
+
+  /usr/local/sbin/validar-servidor --instalar-dependencias
+
+Pacotes solicitados:
+stress-ng, memtester, lm-sensors, smartmontools, sysstat, ethtool, hdparm,
+pciutils, dmidecode, htop, iperf3, iputils-ping, iproute2, procps, util-linux,
+coreutils e less.
+
+A instalação usa apt-get update e apt-get install. Precisa de repositórios
+funcionando e pode acionar scripts de configuração dos pacotes instalados.
+Não troca sources.list, não desativa assinaturas e não executa upgrade geral.
+Se o APT falhar, pare e revise os repositórios aprovados para o seu ambiente.
+Não misture pacotes de outra versão do Debian para contornar a falha.
+
+nft e iptables-save são consultados quando já existem. Não são instalados
+automaticamente, para evitar mexer na pilha de firewall da máquina.
+O script existente /usr/local/sbin/teste-saude-disco também não é instalado.
+
+5. PRIMEIRA EXECUÇÃO — SOMENTE CONSULTA
+
+  /usr/local/sbin/validar-servidor --modo consulta --disco /dev/sda
+
+Este é o modo padrão. Coleta dados, faz ping/DNS e lê SMART, mas não executa
+stress, memtester, benchmark, autoteste novo, script local full ou iperf.
+Mesmo consultas têm algum custo e leituras SMART podem acordar discos em standby.
+
+Com identificação do cliente e do responsável:
+
+  /usr/local/sbin/validar-servidor --modo consulta --disco /dev/sda --cliente "Cliente teste" --tecnico "Lucas"
+
+6. EXECUÇÃO COMPLETA — EM MANUTENÇÃO
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --cliente "Cliente teste" --tecnico "Lucas"
+
+--confirmar-manutencao confirma que você autorizou os testes de carga.
+Não há perguntas no meio da execução. Comandos que não podem rodar são registrados.
+
+Tempos configurados:
+- Stress inicial CPU/RAM: 2 minutos.
+- Memtester: duas passagens, no máximo 60 minutos; se exceder, fica INCONCLUSIVO.
+- Ping do gateway: 50 pacotes por interface com rota default IPv4.
+- Ping externo: 100 pacotes por interface com rota default IPv4.
+- Ping por nome: 20 pacotes pela rota padrão.
+- Ping de --alvo-rede: 50 pacotes por destino/interface configurados.
+- Autoteste curto SMART: acompanha por até 15 minutos por disco.
+- CPU adicional: 10 minutos.
+- RAM adicional: 10 minutos.
+- Escrita em arquivo: 5 minutos.
+- iperf opcional: 30 segundos por interface com endereço IPv4 global.
+
+Reserve aproximadamente 40 a 120 minutos; depende dos discos, da RAM e da rede.
+O script local de saúde, se habilitado, pode acrescentar até duas horas POR DISCO.
+Os limites encerram processos normalmente; processos presos no kernel podem
+demorar a responder aos sinais. Nenhum teste por software elimina esse risco.
+
+7. TEMPERATURA E MEMÓRIA — PROTEÇÕES
+
+Durante os testes de carga, o script amostra a cada 5 segundos:
+- Temperatura dos sensores CPU reconhecidos pelo hwmon.
+- MemAvailable, sem considerar swap como RAM disponível.
+
+Por padrão, interrompe a carga ao atingir 85 °C ou ficar abaixo de 128 MiB
+disponíveis. Uma interrupção dessas bloqueia as próximas cargas, mas conserva
+as consultas e os logs. Falha de stress ou SMART crítico também bloqueia cargas.
+85 °C é um limite operacional conservador, não a especificação de todo processador.
+Consulte os limites do fabricante antes de alterar. Picos entre amostras podem
+passar despercebidos; a proteção não substitui refrigeração/monitoramento adequado.
+
+Exemplo com limite personalizado de 80 °C:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --limite-temp 80
+
+Drivers reconhecidos para o bloqueio térmico:
+coretemp, k10temp, k8temp, zenpower e cpu_thermal.
+Se não houver leitura válida, os testes de carga são omitidos por padrão.
+O comando sensors é coletado separadamente, inclusive para outros sensores.
+O script NÃO roda sensors-detect, não carrega módulos e não altera a BIOS.
+
+Somente se houver acompanhamento externo e você aceitar essa limitação:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --permitir-sem-sensor
+
+Não use essa opção apenas para esconder a ausência de monitoramento.
+
+RAM de cada teste: no máximo 50% de MemAvailable, limitada a 1024 MiB por padrão,
+e deixando ao menos 512 MiB livres no início. O valor é recalculado antes do teste.
+É usado um único worker de RAM, evitando multiplicar a alocação por vários workers.
+Não se usa automaticamente 75% de RAM com quatro processos como no manual anterior.
+Essa reserva reduz o risco de OOM, mas não garante disponibilidade sob carga concorrente.
+
+Para reduzir o teto de memória para 512 MiB:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --memoria-mb 512
+
+O teto aceito vai de 64 a 4096 MiB. Memtester verifica apenas a área alocada,
+não a RAM inteira nem toda a memória ocupada pelo sistema.
+
+8. DISCOS E TESTE DE ESCRITA
+
+Para consultar/testar dois discos:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --disco /dev/sdb
+
+SMART, autoteste curto e benchmark são avaliados por disco selecionado.
+O autoteste não substitui nem aborta outro teste que já esteja em andamento.
+Se a espera terminar sem comprovar conclusão, o relatório informa INCONCLUSIVO;
+o teste no firmware pode continuar. Verifique depois com smartctl -l selftest.
+
+O stress de escrita usa SOMENTE arquivos temporários, não escreve diretamente
+em /dev/sda. Por padrão usa /var/tmp, com um worker e arquivo de até 256 MiB.
+Os 256 MiB são o tamanho de trabalho, NÃO o total escrito em cinco minutos.
+Haverá reescritas, consumo de I/O e desgaste; execute apenas quando autorizado.
+
+Antes de iniciar, exige:
+- Diretório existente em ext3, ext4, XFS ou Btrfs local.
+- Vínculo comprovável do filesystem com um dos discos selecionados via lsblk.
+- Reserva de 2 GiB e de pelo menos 10% da capacidade após o arquivo de teste.
+
+Se /var/tmp estiver em tmpfs ou não pertencer a um disco selecionado, a etapa
+será omitida. Informe uma pasta existente no filesystem do disco desejado:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sdb --diretorio-disco /mnt/dados
+
+Confirme que /mnt/dados realmente está montado onde você espera.
+Somente ESSE filesystem recebe o teste de escrita, não todos os discos.
+Para testar outro filesystem, execute uma nova rodada direcionada a ele.
+RAID/Btrfs multidisco exige revisão manual; não há certificação individual de mídia.
+
+O stress-ng normalmente limpa seus arquivos. Se sobrar algo, o script informa
+o diretório exato e não faz remoção recursiva. Revise antes de apagar manualmente.
+
+9. INCLUIR SEU SCRIPT DE SAÚDE DO DISCO
+
+O script /usr/local/sbin/teste-saude-disco é independente e não é auditado
+automaticamente pelo validador. O SMART nativo já integra a validação.
+Se esse script local é confiável, foi revisado e você quer incluí-lo:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --script-saude
+
+Será chamado na etapa 1 assim:
+
+  /usr/local/sbin/teste-saude-disco /dev/sda full
+
+Sua saída de terminal entra no relatório principal. Outros arquivos criados por
+esse script permanecem nos locais próprios; não são copiados automaticamente.
+O conteúdo e os efeitos desse script não estão limitados pelas garantias do
+validador. Um código de saída não zero bloqueia novas cargas por precaução;
+revise se foi falha real, comando SMART não suportado ou outra condição.
+
+10. TESTAR PLACAS DE REDE
+
+O padrão detecta interfaces Ethernet ligadas a dispositivos, sem presumir nomes.
+Para selecionar explicitamente onboard e offboard:
+
+  /usr/local/sbin/validar-servidor --interface eth0 --interface eth1 --disco /dev/sda
+
+Use os nomes mostrados por ip -br link. Não é necessário ter duas placas.
+O script não configura IP, não habilita portas e não cria/remove rotas.
+Os pings de gateway e internet por placa exigem rota default IPv4 nela.
+Sem essa rota, fica explícito que o teste externo daquela placa não foi feito.
+Para testar um equipamento na rede local de uma placa sem rota default, use:
+
+  /usr/local/sbin/validar-servidor --etapas 2 --interface eth1 --alvo-rede eth1=192.168.1.1
+
+Substitua eth1 e o IP pelos valores corretos. Repita --alvo-rede para outras
+placas. O destino precisa ser alcançável pela placa, com cabo/link e IP já
+configurados. Não se cria uma segunda rota default só para fazer esse ping.
+O ping local não comprova acesso à internet. Se o link estiver ausente, a etapa
+fica pendente até você conectar fisicamente o cabo/porta.
+Placa desconectada ou sem configuração não pode ser considerada aprovada.
+
+Link detected: yes confirma link, NÃO certifica a integridade do cabo.
+Contadores RX/TX/drops são comparados antes/depois; tráfego concorrente também
+pode alterá-los. Falha de ping pode decorrer de bloqueio ICMP, não de placa defeituosa.
+Velocidade e duplex são coletados; compare com a velocidade esperada do ambiente.
+
+Para testar vazão, instale iperf3 em um segundo equipamento e execute nele:
+
+  iperf3 -s
+
+No servidor sendo validado, em manutenção:
+
+  /usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --iperf-servidor 192.168.1.10
+
+Substitua 192.168.1.10 pelo IP real do equipamento de teste. Libere a porta TCP
+5201 apenas na rede de testes, se necessário; o script não altera firewall.
+Encerre o servidor iperf3 com Ctrl+C quando terminar. O validador testa envio TCP,
+não UDP/jitter, nem tráfego reverso. Vincula ao IPv4 da placa; em redes com políticas
+ou múltiplas NICs na mesma sub-rede, confirme manualmente o caminho de saída.
+
+Para trocar os destinos externos:
+
+  /usr/local/sbin/validar-servidor --ip-internet 1.1.1.1 --nome-dns debian.org
+
+Ping e DNS geram tráfego aos destinos configurados. Não enviam os relatórios.
+
+11. EXECUTAR APENAS ALGUMAS ETAPAS
+
+Exemplo: rede, logs e sincronismo, sem carga:
+
+  /usr/local/sbin/validar-servidor --etapas 2,6,9 --modo consulta
+
+Exemplo: disco em manutenção:
+
+  /usr/local/sbin/validar-servidor --etapas 5 --modo completo --confirmar-manutencao --disco /dev/sda
+
+As etapas escolhidas sempre seguem a ordem numérica do manual. As demais são
+marcadas como não executadas. Etapa 11 sozinha não inclui as coletas iniciais.
+
+12. ONDE FICAM OS RELATÓRIOS
+
+Cada execução gera uma pasta independente:
+
+  /var/log/validacao-servidor/AAAAMMDD-HHMMSS-identificador/
+
+Dentro dela:
+- RESUMO.txt: identificação, resultado geral, contagens, resultados e pendências.
+- RELATORIO_COMPLETO.txt: resumo, comandos e saídas de cada teste.
+- resultados.tsv: resultados estruturados, abertos como texto ou planilha.
+- comandos.txt: comando executado, início e título.
+- logs/: stdout e stderr de cada comando, incluindo erros e saídas parciais.
+- temperatura_memoria.tsv: amostras durante testes de carga.
+- nic-INTERFACE-antes.tsv/depois.tsv: contadores de cada placa testada.
+
+O caminho EXATO aparece no início e no fim da execução. Copie-o para consultar:
+
+  less /var/log/validacao-servidor/PASTA_DA_EXECUCAO/RESUMO.txt
+  less /var/log/validacao-servidor/PASTA_DA_EXECUCAO/RELATORIO_COMPLETO.txt
+
+Substitua PASTA_DA_EXECUCAO; não copie esse nome literalmente.
+
+Para escolher outro local (pasta do root, sem escrita para grupo/outros):
+
+  /usr/local/sbin/validar-servidor --saida /root/relatorios-validacao
+
+Os arquivos ficam restritos ao root por padrão. Podem conter IPs, números de
+série, processos, regras de firewall e mensagens de serviços. Revise antes de
+compartilhar. Não existe upload automático nem envio por e-mail.
+
+Para compactar uma execução depois de encerrada:
+
+  tar -czf /root/validacao-servidor.tar.gz -C /var/log/validacao-servidor PASTA_DA_EXECUCAO
+
+Escolha outro nome se /root/validacao-servidor.tar.gz já existir.
+
+13. COMO INTERPRETAR
+
+OK              Verificação específica concluída conforme o critério do script.
+COLETADO        Dados obtidos; exigem interpretação, não significam aprovação.
+ATENCAO         Condição suspeita, aviso, histórico ou limitação do ambiente.
+FALHA           Ferramenta falhou ou foi detectada condição crítica/proteção.
+INCONCLUSIVO    Falha de coleta, tempo limite ou impossibilidade de concluir.
+NAO_EXECUTADO   Ferramenta ausente, modo incompatível, etapa omitida ou pré-requisito.
+INFO            Observação ou informação complementar.
+
+Nos alertas, o terminal mostra o arquivo de evidência e as últimas seis linhas
+do comando. As primeiras dez unidades com falha ganham coleta de status e logs.
+A versão 1.1.0 diferencia erro ao CONSULTAR o journal de entradas reais de erro
+no journal; não presume que a falha da ferramenta seja falha de hardware.
+
+Retorno do programa (execute echo $? imediatamente após o comando):
+0    Rodada concluída sem alertas automáticos; ainda pode haver itens não testados.
+1    Rodada concluída com ATENCAO, FALHA ou INCONCLUSIVO.
+2    Erro de opção, dependência básica ou preparação.
+130  Interrompido com Ctrl+C.
+143  Encerrado por TERM/HUP.
+
+SMART usa códigos em forma de bitmask. Falha de comando ou histórico de erros
+não são automaticamente defeito físico; limiares críticos recebem FALHA.
+O script não calcula vida útil universal do SSD nem aprova todos os atributos.
+Uma leitura de SMART saudável não garante ausência de defeitos.
+
+Conforme sua preferência, link SATA 3 Gb/s e a mensagem informativa
+EXT4-fs ... re-mounted. Opts: errors=remount-ro não são motivos isolados de reprovação.
+Os logs brutos continuam disponíveis. Erros reais EXT4, I/O, resets e corrupção
+precisam de investigação e NÃO devem ser ignorados.
+
+14. COMANDOS INTERATIVOS MANTIDOS PARA ACOMPANHAMENTO
+
+Para não travar o fluxo automático, as equivalências usadas são:
+- watch sensors: amostras térmicas durante a carga + sensors inicial/final.
+- htop: top em modo batch com três amostras.
+- dmesg | less: dmesg salvo sem pager.
+- systemctl status: mantido com --no-pager --full.
+
+Em outro terminal você pode continuar usando normalmente:
+
+  watch -n1 sensors
+  htop
+  dmesg -T | less
+  systemctl status
+
+Ctrl+C encerra watch; q sai de htop/less. Não pressione Ctrl+C no terminal do
+validador a menos que queira interromper a validação.
+
+15. SSH, INTERRUPÇÃO E RECUPERAÇÃO
+
+Use uma sessão persistente como tmux, se já estiver disponível:
+
+  tmux new -s validacao
+
+Dentro dela, execute o comando desejado. Para desconectar sem parar: Ctrl+B,
+depois D. Para voltar:
+
+  tmux attach -t validacao
+
+Sem sessão persistente, mantenha a conexão SSH aberta durante toda a execução.
+Ctrl+C solicita encerramento do teste ativo e gera o relatório parcial.
+Não permite duas validações simultâneas: usa um lock mantido pelo processo.
+Não apague o lock para contornar uma rodada que ainda esteja em execução.
+
+Queda de energia, reboot ou SIGKILL impedem o fechamento normal. Os logs já
+gravados permanecem, mas o resumo final pode não existir ou estar incompleto.
+Não há retomada automática; execute nova rodada e preserve os resultados anteriores.
+Um autoteste SMART já iniciado roda no firmware e pode continuar após a saída.
+
+16. COMO RESOLVER TESTES NÃO EXECUTADOS
+
+- "Exige modo completo": você executou consulta. Use a seção 6 em manutenção.
+- "Sem link": conecte cabo, confira switch e configuração da interface.
+- "Sem rota default": configure --alvo-rede para validar apenas a rede local.
+- "Nenhum servidor iperf3": execute iperf3 -s em outra máquina e informe seu IP.
+- "Script local de saúde opcional": não é necessário para SMART nativo; só
+  habilite --script-saude se quiser executar o programa externo já instalado.
+- "iptables-save não instalado": o resultado nftables é coletado separadamente.
+  Não é necessário instalar outro firewall só para eliminar essa mensagem.
+- "Falha ao consultar journal": a versão 1.1.0 usa data compatível com o Debian
+  11. Se continuar falhando, verifique a mensagem real no arquivo de evidência.
+- "Unidades com falha": o validador informa quais são e coleta os logs; não
+  reinicia nem reconfigura esses serviços automaticamente.
+
+Não é possível fazer todos os testes passarem sem atender aos pré-requisitos.
+Um item omitido não deve ser convertido em aprovado apenas para limpar o resumo.
+
+17. LIMITAÇÕES E VALIDAÇÃO DESTA ENTREGA
+
+O código foi conferido com bash -n e testes automatizados locais de lógica,
+classificação, memória, modos, timeout, interrupção, proteção térmica, SMART
+simulado, relatórios e fluxo simulado das 11 etapas. Foi feita uma execução
+real limitada à consulta de identificação em ambiente local.
+
+Não foi executado nos seus servidores Debian 11, nem submeteu seus discos/RAM
+a stress. Faça primeiro um teste supervisionado. Os testes simulados verificam
+o comportamento do programa, não a saúde ou compatibilidade do seu hardware.
+
+O Debian 11 exige atenção especial à cobertura de segurança e à compatibilidade
+do Ironvox. Este utilitário não adiciona suporte de segurança ao sistema.
+
+Referências técnicas consultadas:
+https://manpages.debian.org/bullseye/stress-ng/stress-ng.1.en.html
+https://manpages.debian.org/bullseye/smartmontools/smartctl.8.en.html
+https://manpages.debian.org/bullseye/memtester/memtester.8.en.html
+https://manpages.debian.org/bullseye/systemd/journalctl.1.en.html
+https://git-scm.com/docs/git-pull
+
+CHECKLIST FINAL DO TÉCNICO
+[ ] Rever RESUMO.txt e logs com alerta.
+[ ] Resolver ou justificar cada teste não executado/inconclusivo.
+[ ] Confirmar resultado SMART, temperatura e contadores de rede.
+[ ] Conferir hora, serviços, espaço, backup e recuperação.
+[ ] Testar ligações de entrada/saída, áudio, transferências, filas e gravação.
+[ ] Registrar aprovação/reprovação e pendências do cliente.
+[ ] Guardar o relatório junto à documentação da entrega.
