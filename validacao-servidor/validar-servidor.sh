@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Validação sequencial de servidores Debian 11 — v1.2.0
+# Validação sequencial de servidores Debian 11 — v1.3.0
 # Não executa testes de carga sem --modo completo --confirmar-manutencao.
 # Não formata discos, não altera rede/firewall e não reinicia serviços.
 set -uo pipefail
 export LC_ALL=C
 umask 077
 
-VERSION=1.2.0
+VERSION=1.3.0
 MODE=consulta
+PROFILE=auto
+EFFECTIVE_PROFILE=hardware
+CONDITION=nao-informada
+FULL_REPORT=0
 CONFIRM=0
 INSTALL=0
 STEPS=1,2,3,4,5,6,7,8,9,10,11
@@ -42,6 +46,9 @@ Validação de servidores Debian 11 — SSD/HD SATA
 Uso (conectado como root): bash validar-servidor.sh [opções]
   --modo consulta|completo   Consulta é o padrão, sem carga proposital.
   --confirmar-manutencao     Obrigatório para o modo completo.
+  --perfil auto|hardware|ipbx Auto exige telefonia se Asterisk estiver instalado.
+  --condicao nova|usada|energia Histórico informado pelo técnico, sem mudar a carga.
+  --relatorio-completo       Também mostra todos os logs ao finalizar.
   --disco /dev/sda           Repita para outros discos SATA; padrão /dev/sda.
   --interface eth0           Repita para selecionar NICs; padrão autodetectar.
   --alvo-rede eth1=IP        Testa um destino por placa, mesmo sem rota default.
@@ -64,7 +71,7 @@ Uso (conectado como root): bash validar-servidor.sh [opções]
 Exemplo completo (somente em manutenção, com backup confirmado):
   bash validar-servidor.sh --modo completo --confirmar-manutencao --disco /dev/sda
 
-Saídas: RESUMO.txt, RELATORIO_COMPLETO.txt, resultados.tsv e logs por comando.
+Saídas: DIAGNOSTICO.txt (prático), RESUMO.txt, RELATORIO_COMPLETO.txt e logs.
 Códigos: 0 = coleta concluída sem alertas detectados (não certifica o servidor);
          1 = alertas/falhas/itens inconclusivos; 2 = uso ou preparação inválidos;
          130/143 = execução interrompida. Testes omitidos continuam explícitos.
@@ -78,6 +85,7 @@ parse_args() {
             --ajuda|-h|--help) usage; exit 0 ;;
             --versao|--version) printf 'validar-servidor %s\n' "$VERSION"; exit 0 ;;
             --confirmar-manutencao) CONFIRM=1; shift ;;
+            --relatorio-completo) FULL_REPORT=1; shift ;;
             --permitir-sem-sensor) ALLOW_NO_SENSOR=1; shift ;;
             --script-saude) USE_CUSTOM=1; shift ;;
             --instalar-dependencias) INSTALL=1; shift ;;
@@ -87,9 +95,10 @@ parse_args() {
                 [[ $2 == *=* && $net_iface =~ ^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,14}$ && $net_target =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || die 'Use --alvo-rede INTERFACE=IP.'
                 NETWORK_TARGETS["$net_iface"]=$net_target
                 shift 2 ;;
-            --modo|--saida|--diretorio-disco|--memoria-mb|--limite-temp|--etapas|--disco|--interface|--iperf-servidor|--ip-internet|--nome-dns|--cliente|--tecnico)
+            --perfil|--condicao|--modo|--saida|--diretorio-disco|--memoria-mb|--limite-temp|--etapas|--disco|--interface|--iperf-servidor|--ip-internet|--nome-dns|--cliente|--tecnico)
                 need_value "$@"
                 case $1 in
+                    --perfil) PROFILE=$2 ;; --condicao) CONDITION=$2 ;;
                     --modo) MODE=$2 ;; --saida) BASE=$2 ;; --diretorio-disco) DISK_DIR=$2 ;;
                     --memoria-mb) MEM_MAX=$2 ;; --limite-temp) TEMP_LIMIT=$2 ;;
                     --etapas) STEPS=$2 ;; --disco) DISKS+=("$2") ;;
@@ -101,6 +110,8 @@ parse_args() {
             *) die "Opção desconhecida: $1" ;;
         esac
     done
+    [[ $PROFILE == auto || $PROFILE == hardware || $PROFILE == ipbx ]] || die 'Perfil inválido.'
+    [[ $CONDITION == nao-informada || $CONDITION == nova || $CONDITION == usada || $CONDITION == energia ]] || die 'Condição inválida.'
     [[ $MODE == consulta || $MODE == completo ]] || die 'Modo inválido.'
     [[ $MODE != completo || $CONFIRM == 1 ]] || die 'Modo completo exige --confirmar-manutencao.'
     [[ $MEM_MAX =~ ^[1-9][0-9]{0,3}$ ]] || die 'Memória inválida.'
@@ -174,19 +185,19 @@ progress_line() {
 }
 progress_end() { [[ ! -t 1 || ${TERM:-dumb} == dumb ]] || printf '\n'; }
 show_report() {
-    local line code
-    heading 'RELATÓRIO COMPLETO DA VALIDAÇÃO'
+    local line code file=${1:-$REPORT/RELATORIO_COMPLETO.txt}
+    heading 'RESULTADO DA VALIDAÇÃO'
     while IFS= read -r line || [[ -n $line ]]; do
         code=0
         case $line in
             '====='*|'VALIDAÇÃO DE SERVIDOR'*|'RESULTADOS POR ETAPA'*|'PENDÊNCIAS MANUAIS'*|'COMANDOS EXECUTADOS'*) code='1;36' ;;
-            '[FALHA]'*|'RESULTADO: EXECUÇÃO INCOMPLETA.'*) code='1;31' ;;
-            '[ATENCAO]'*|'[INCONCLUSIVO]'*|'RESULTADO: REVISÃO'*) code='1;33' ;;
+            '[CRITICO]'*|'NÃO LIBERAR'*|'[FALHA]'*|'RESULTADO: EXECUÇÃO INCOMPLETA.'*) code='1;31' ;;
+            '[PENDENTE]'*|'LIBERAÇÃO PENDENTE'*|'INCONCLUSIVO'*|'[ATENCAO]'*|'[INCONCLUSIVO]'*|'RESULTADO: REVISÃO'*) code='1;33' ;;
             '[OK]'*) code=32 ;; '[NAO_EXECUTADO]'*) code=35 ;;
             '[COLETADO]'*|'[INFO]'*) code=36 ;;
         esac
         paint "$code" "$line"
-    done < "$REPORT/RELATORIO_COMPLETO.txt"
+    done < "$file"
 }
 
 record() {
@@ -373,6 +384,28 @@ stop_children() {
         ACTIVE=
     fi
 }
+smart_snapshot() {
+    local disk=$1 phase=$2 target
+    target="$REPORT/smart-${disk##*/}-$phase.json"
+    [[ $phase == inicial && -f $target ]] && return 0
+    run "SMART estruturado $disk ($phase)" smart 90 smartctl -x -j "$disk"
+    [[ -f $LAST_LOG ]] && cp -- "$LAST_LOG" "$target"
+    return 0
+}
+
+build_diagnosis() {
+    local source_dir helper
+    source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+    helper="$source_dir/diagnostico.py"
+    [[ -f $helper ]] || helper="$source_dir/../share/validar-servidor/diagnostico-1.3.0.py"
+    printf 'fim\t%s\n' "$(date -Is)" >> "$REPORT/contexto.tsv"
+    if command -v python3 >/dev/null && [[ -f $helper ]] && python3 "$helper" "$REPORT" 2> "$REPORT/diagnostico-erros.log"; then
+        return 0
+    fi
+    printf '1\n' > "$REPORT/diagnostico-status.txt"
+    printf 'INCONCLUSIVO — diagnóstico prático indisponível.\nReinstale pelo instalar.sh e instale python3. Consulte RESUMO.txt e diagnostico-erros.log.\n' > "$REPORT/DIAGNOSTICO.txt"
+}
+
 finish() {
     local exit_code=$? file log_title
     ((FINISHED)) && return
@@ -416,8 +449,10 @@ finish() {
             cat "$file"
         done
     } > "$REPORT/RELATORIO_COMPLETO.txt"
-    show_report
-    printf '\nRelatórios salvos em: %s\nResumo: %s/RESUMO.txt\n' "$REPORT" "$REPORT"
+    build_diagnosis
+    show_report "$REPORT/DIAGNOSTICO.txt"
+    if ((FULL_REPORT)); then show_report; fi
+    printf '\nRelatórios salvos em: %s\nDiagnóstico: %s/DIAGNOSTICO.txt\n' "$REPORT" "$REPORT"
 }
 
 prepare() {
@@ -438,6 +473,18 @@ prepare() {
     REPORT=$(mktemp -d "$BASE/$(date +%Y%m%d-%H%M%S)-XXXXXX") || die 'Falha ao criar pasta da execução.'
     mkdir "$REPORT/logs" || die 'Falha ao criar logs.'
     START_ISO=$(date -Is)
+    EFFECTIVE_PROFILE=$PROFILE
+    if [[ $PROFILE == auto ]]; then
+        if command -v asterisk >/dev/null; then EFFECTIVE_PROFILE=ipbx
+        else EFFECTIVE_PROFILE=hardware; fi
+    fi
+    {
+        printf 'cliente\t%s\ntecnico\t%s\nhost\t%s\ninicio\t%s\n' "$CLIENTE" "$TECNICO" "$(hostname)" "$START_ISO"
+        printf 'perfil_efetivo\t%s\ncondicao\t%s\ndiscos\t%s\n' "$EFFECTIVE_PROFILE" "$CONDITION" "${DISKS[*]}"
+        awk '{s=int($1); printf "uptime\t%d dias, %02dh %02dmin\n",s/86400,s%86400/3600,s%3600/60}' /proc/uptime
+        printf 'boot\t%s\n' "$(uptime -s 2>/dev/null || printf 'Não disponível')"
+        awk '/^MemTotal:/ {printf "ram_mib\t%d\n",$2/1024}' /proc/meminfo
+    } > "$REPORT/contexto.tsv"
     START_JOURNAL=$(date '+%Y-%m-%d %H:%M:%S')
     printf 'etapa\tstatus\tteste\tcodigo\tdetalhes\tlog\n' > "$REPORT/resultados.tsv"
     printf 'data\ttemperatura_cpu_miligraus\tmem_disponivel_mib\n' > "$REPORT/temperatura_memoria.tsv"
@@ -486,6 +533,7 @@ step1() {
     local disk
     for disk in "${VALID_DISKS[@]}"; do
         run "SMART inicial $disk" smart 90 smartctl -x "$disk"
+        smart_snapshot "$disk" inicial
         if ((USE_CUSTOM)); then
             if load_allowed "Script local de saúde $disk"; then
                 run "Script local de saúde $disk" carga 7200 /usr/local/sbin/teste-saude-disco "$disk" full
@@ -493,6 +541,7 @@ step1() {
         else skip "Script local de saúde $disk" 'Opcional: habilitar --script-saude após revisar seu código. SMART nativo é coletado independentemente.'; fi
     done
     run 'Espaço em disco' coleta 30 df -h
+    run 'Ocupação dos sistemas de arquivos' coleta 30 df -Pk
     run 'Inodes' coleta 30 df -i
     run 'Partições' coleta 30 lsblk -f
     run 'I/O amostrado' coleta 30 iostat -xz 1 10
@@ -607,7 +656,9 @@ step5() {
     ((${#VALID_DISKS[@]})) || skip 'Disco/SMART/benchmark' 'Nenhum disco SATA válido selecionado.'
     for disk in "${VALID_DISKS[@]}"; do
         run "SMART completo $disk" smart 90 smartctl -x "$disk"
+        smart_snapshot "$disk" inicial
         smart_short "$disk"
+        smart_snapshot "$disk" final
         if [[ $MODE == completo && $ABORT_LOAD == 0 ]]; then run "Leitura/cache $disk" coleta 90 hdparm -Tt "$disk"
         else skip "Benchmark $disk" 'Exige modo completo sem alerta crítico anterior.'; fi
     done
@@ -640,9 +691,11 @@ step7() {
     failed_details
     run 'Visão geral systemd' service_status 30 systemctl status --no-pager --full
     run 'Serviços em execução' coleta 30 systemctl list-units --type=service --state=running --no-pager
-    run 'Status Asterisk' check 30 systemctl is-active asterisk
-    run 'Asterisk uptime' check 30 asterisk -rx 'core show uptime'
-    run 'Asterisk canais' coleta 30 asterisk -rx 'core show channels'
+    if [[ $EFFECTIVE_PROFILE == ipbx ]]; then
+        run 'Status Asterisk' check 30 systemctl is-active asterisk
+        run 'Asterisk uptime' check 30 asterisk -rx 'core show uptime'
+        run 'Asterisk canais' coleta 30 asterisk -rx 'core show channels'
+    else record INFO 'Perfil hardware' 'Telefonia não exigida. Use --perfil ipbx para uma máquina destinada à entrega com Ironvox.'; fi
     record INFO 'Telefonia' 'Status do processo não valida chamadas, RTP, troncos, filas ou gravação; testar manualmente.'
 }
 step8() {
@@ -668,7 +721,7 @@ step10() {
     run 'Identificação' coleta 20 hostnamectl
     run 'Kernel' coleta 20 uname -a
     run 'Distribuição' coleta 20 cat /etc/os-release
-    run 'Reinicializações (20 registros)' coleta 20 last -x -n 20
+    run 'Histórico de energia do sistema' coleta 30 last -x -F reboot shutdown
     run 'Disco raiz' coleta 20 findmnt -no SOURCE,FSTYPE,TARGET /
     run 'Inventário discos' coleta 20 lsblk -d -o NAME,MODEL,SERIAL,SIZE,TYPE,ROTA
     record INFO 'Suporte do sistema' 'Registrar cobertura de segurança e compatibilidade; o script não altera repositórios nem atualiza o sistema.'
@@ -706,7 +759,7 @@ step11() {
     run 'Serviços com falha ao final' failed_units 30 systemctl --failed --no-legend --no-pager --plain
     failed_details
     local disk
-    for disk in "${VALID_DISKS[@]}"; do run "SMART final $disk" smart 90 smartctl -x "$disk"; done
+    for disk in "${VALID_DISKS[@]}"; do run "SMART final $disk" smart 90 smartctl -x "$disk"; smart_snapshot "$disk" final; done
 }
 
 main() {
@@ -715,7 +768,7 @@ main() {
         ((EUID == 0)) || die 'Execute a instalação como root.'
         printf 'Instalando dependências. Sem mudança de repositórios; falhas APT exigem revisão.\n'
         apt-get update || die 'apt-get update falhou; revisar repositórios/assinaturas.'
-        DEBIAN_FRONTEND=noninteractive apt-get install -y stress-ng memtester lm-sensors smartmontools sysstat ethtool hdparm pciutils dmidecode htop iperf3 iputils-ping iproute2 procps util-linux coreutils less || die 'Instalação falhou.'
+        DEBIAN_FRONTEND=noninteractive apt-get install -y stress-ng memtester lm-sensors smartmontools sysstat ethtool hdparm pciutils dmidecode htop iperf3 iputils-ping iproute2 procps util-linux coreutils less python3 || die 'Instalação falhou.'
         printf 'Instalação concluída. Execute novamente sem --instalar-dependencias para validar.\n'
         return 0
     fi
@@ -727,6 +780,7 @@ main() {
     done
     finish
     trap - EXIT INT TERM HUP
+    [[ $(cat "$REPORT/diagnostico-status.txt" 2>/dev/null) == 0 ]] || return 1
     if awk -F '\t' 'NR>1 && ($2=="FALHA" || $2=="ATENCAO" || $2=="INCONCLUSIVO") {found=1} END {exit !found}' "$REPORT/resultados.tsv"; then return 1; fi
     return 0
 }

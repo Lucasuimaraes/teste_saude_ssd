@@ -1,93 +1,82 @@
-VALIDAÇÃO DE SERVIDORES — v1.2.0
-Debian 11 / SSD e HD SATA. Execute os comandos como root.
+VALIDAÇÃO DE SERVIDORES — v1.3.0
+Debian 11 / SSD e HD SATA. Todos os comandos como root.
 
-1. INSTALAR (primeira vez)
-
-apt-get update && apt-get install -y git ca-certificates
+1. INSTALAR
+apt-get update && apt-get install -y git ca-certificates python3
 git clone --branch master https://github.com/Lucasuimaraes/teste_saude_ssd.git /opt/teste_saude_ssd
 bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
-/usr/local/sbin/validar-servidor --instalar-dependencias
+validar-servidor --instalar-dependencias
 
-Se a pasta já existe, atualize. Pare se algum comando falhar.
-
-2. ATUALIZAR (sem teste em execução)
-
+2. ATUALIZAR (aguarde os testes terminarem)
 git -C /opt/teste_saude_ssd pull --ff-only && bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
-/usr/local/sbin/validar-servidor --versao
+validar-servidor --instalar-dependencias
+validar-servidor --versao
 
-O instalador guarda backup da versão anterior.
+Se algum comando falhar, corrija antes de continuar. Não copie apenas o .sh:
+o instalador também instala diagnostico.py e guarda backup do script anterior.
 
 3. EXECUTAR
+Confira disco/interface: lsblk -d -o NAME,MODEL,SIZE,TYPE e ip -br link
+Use disco inteiro /dev/sda, não /dev/sda1. Repita --disco para mais discos.
 
-Confira discos e interfaces:
-lsblk -d -o NAME,MODEL,SIZE,TYPE
-ip -br link
+Consulta (sem stress):
+validar-servidor --modo consulta --disco /dev/sda
 
-Consulta, sem stress:
-/usr/local/sbin/validar-servidor --modo consulta --disco /dev/sda
+Completo (somente em manutenção e com backup confirmado):
+validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --cliente "Cliente" --tecnico "Lucas"
 
-Completo — somente em manutenção, com backup confirmado:
-/usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --cliente "Nome do cliente" --tecnico "Lucas"
+Opções para acrescentar:
+--perfil hardware       Máquina sem telefonia.
+--perfil ipbx           Exige verificação do Asterisk/Ironvox.
+--perfil auto           Padrão: IPBX se executável Asterisk existe; senão hardware.
+--condicao nova         Máquina informada como nova.
+--condicao usada        Máquina com uso anterior.
+--condicao energia      Histórico informado de picos/quedas de energia.
+--memoria-mb 2048       Teto da RAM por teste; padrão 1024, máximo 4096 MiB.
+--relatorio-completo    Mostra também todos os logs ao finalizar.
 
-Use o disco inteiro (/dev/sda), não a partição (/dev/sda1).
-Para outro disco, repita --disco /dev/sdb.
-Sem sensor CPU reconhecido, a carga é omitida. --permitir-sem-sensor exige supervisão externa.
-O script não altera rede/firewall, não formata discos e não reinicia serviços.
+A condição não muda a carga nem comprova defeito. Sem sensor CPU, a carga é
+omitida. --permitir-sem-sensor exige supervisão externa.
 
-4. TEMPO E RESULTADO
+4. ENTENDER O DIAGNÓSTICO
+Conclusão + ações prioritárias + evidências + situação de cada componente.
+NÃO LIBERAR: condição crítica ou falha de carga que precisa ser investigada.
+LIBERAÇÃO PENDENTE: corrigir alertas ou completar testes.
+INCONCLUSIVO: execução interrompida/incompleta.
+Sem alertas automáticos: ainda exige conferência técnica antes da entrega.
 
-Contagem em HH:MM:SS, atualizada a cada segundo no terminal.
-Mostra tempo decorrido, restante estimado e limite máximo.
-Duração variável: não há previsão exata; o limite não é tempo esperado.
-Previsão atingida: aguarda a ferramenta terminar, respeitando o limite.
-SMART consulta o disco a cada 15 segundos, com contador entre consultas.
+Uso: uptime e último boot; horas/ciclos do disco se suportados pelo SMART.
+Boots/desligamentos: apenas registros disponíveis no wtmp atual, não a vida toda.
+RAM: passou/falhou/não testada, região alocada e limitações de cobertura.
+Disco: condição SMART, setores, comunicação SATA e evolução durante a rodada.
+Horas altas não condenam peças. CRC pede conferir cabo/porta. Contador de
+energia não comprova pico elétrico. Sem interpretação validada, não há % de vida.
 
-Durações principais:
-- CPU/RAM inicial: 2 minutos.
-- Memtester (2 passagens): variável, limite de 1 hora.
-- Autoteste SMART: estimativa do disco; acompanhamento por até 15 minutos.
-- CPU adicional: 10 minutos. RAM adicional: 10 minutos.
-- Escrita em arquivo: 5 minutos.
-As demais coletas dependem do equipamento. O total depende das etapas e placas.
+Cores: vermelho crítico; amarelo atenção/pendência; títulos em ciano.
+Arquivos em /var/log/validacao-servidor/<execução>/:
+DIAGNOSTICO.txt = prático | RESUMO.txt = por comando
+RELATORIO_COMPLETO.txt = logs e comandos completos
 
-Ao finalizar, o relatório COMPLETO aparece na tela, separado por etapas.
-Cores: verde OK; amarelo atenção/inconclusivo; vermelho falha;
-roxo não executado; azul/ciano informações e títulos.
-COLETADO não significa APROVADO. Teste omitido não é teste aprovado.
+Para reler, substitua <execução> pela pasta indicada:
+less /var/log/validacao-servidor/<execução>/DIAGNOSTICO.txt
 
-Arquivos: /var/log/validacao-servidor/<execução>/
-- RESUMO.txt: resultados por etapa.
-- RELATORIO_COMPLETO.txt: resumo, comandos e todos os logs coletados.
-- resultados.tsv e logs/: dados para diagnóstico.
+Contador em HH:MM:SS; limite máximo é separado da estimativa.
+CPU/RAM inicial: 2 min. Memtester: variável (limite 1h).
+SMART curto: estimativa do disco (acompanha até 15 min).
+CPU adicional: 10 min. RAM adicional: 10 min. Escrita: 5 min.
+Ctrl+C salva resultado parcial; autoteste SMART no firmware pode continuar.
 
-Para reler, substitua <execução> pela pasta indicada ao finalizar:
-less /var/log/validacao-servidor/<execução>/RELATORIO_COMPLETO.txt
+5. ETAPAS E REDE
+1 Hardware | 2 Placas/rede | 3 CPU | 4 RAM | 5 Disco | 6 Logs
+7 Serviços | 8 Rede/firewall | 9 Hora/NTP | 10 Sistema | 11 Stress
+Seleção: acrescente --etapas 1,5,11. Carga exige modo completo.
 
-Ctrl+C salva resultado parcial. Autoteste no firmware pode continuar.
-Arquivos e saída redirecionada ficam sem cores. NO_COLOR=1 desativa cores.
-Relatórios contêm dados do servidor: não publique no GitHub.
+Segunda placa, com cabo/IP configurados (substitua interface/destino):
+validar-servidor --etapas 2 --interface eth1 --alvo-rede eth1=192.168.1.1
+Vazão: iperf3 -s em outro equipamento; --iperf-servidor IP no modo completo.
 
-5. ETAPAS / REDE
-
-1 Hardware | 2 Placas de rede | 3 CPU | 4 Memória | 5 Disco
-6 Logs | 7 Serviços/Asterisk | 8 Rede/firewall | 9 Hora/NTP
-10 Sistema | 11 Stress adicional
-
-Selecionar etapas: acrescente --etapas 1,5,11 ao comando desejado.
-Os testes de carga exigem --modo completo --confirmar-manutencao.
-
-Segunda placa: cabo conectado e IP configurado. Substitua interface e destino:
-/usr/local/sbin/validar-servidor --etapas 2 --interface eth1 --alvo-rede eth1=192.168.1.1
-
-Vazão: em outro equipamento, execute iperf3 -s.
-No servidor, acrescente --iperf-servidor IP ao comando completo.
-
-6. CONFERÊNCIA FINAL
-
-Revise alertas, falhas e testes omitidos. Teste chamadas, áudio, transferências,
-filas e gravação. Confira backup, nobreak, cabos e ventilação.
-EXT4 re-mounted/errors=remount-ro e SATA 3 Gb/s isolados não indicam defeito.
-
-Códigos de saída: 0 coleta sem alertas automáticos; 1 revisar resultados;
-2 erro de uso/preparação; 130/143 interrupção.
-Todas as opções: /usr/local/sbin/validar-servidor --ajuda
+Antes da entrega: conferir backup, cabos, refrigeração e nobreak.
+Para IPBX, testar chamadas, áudio, transferência, filas e gravação.
+Não publique relatórios de clientes no GitHub.
+Códigos: 0 sem alertas; 1 pendências/falhas; 2 uso inválido; 130/143 interrupção.
+Ajuda: validar-servidor --ajuda

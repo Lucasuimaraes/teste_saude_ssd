@@ -1,5 +1,16 @@
 # Histórico
 
+## 1.3.0
+
+- Diagnóstico prático padrão com conclusão, prioridades, evidências e ações.
+- Uptime, último boot e contagem limitada ao histórico wtmp disponível.
+- SMART em JSON: horas do disco, ciclos, desligamentos inesperados reconhecidos e comparação inicial/final por série.
+- Resultado e cobertura do memtester; temperatura máxima e ocupação de disco.
+- Diferencia desgaste, defeito de mídia, comunicação SATA e falha de execução.
+- Perfis auto/hardware/ipbx e condição informada nova/usada/energia.
+- Logs completos preservados; --relatorio-completo permite exibi-los.
+- Novo auxiliar Python 3 instalado com o script; sem serviços externos.
+
 ## 1.2.0
 
 - Contador ao vivo em HH:MM:SS, estimativa por comando e limite separado.

@@ -12,3 +12,8 @@ comandos.txt
 temperatura_memoria.tsv
 nic-*-antes.tsv
 nic-*-depois.tsv
+DIAGNOSTICO.txt
+diagnostico-status.txt
+contexto.tsv
+smart-sd*-inicial.json
+smart-sd*-final.json

@@ -28,7 +28,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(subprocess.run(['bash', '-n', str(SCRIPT)]).returncode, 0)
 
     def test_cli_guards(self):
-        for args in [['--modo', 'completo'], ['--disco', '/dev/sda1'], ['--etapas', '12'], ['--memoria-mb', '9999'], ['--interface', 'eth0;id'], ['--saida', 'relative'], ['--nome-dns', '-bad'], ['--modo'], ['--unknown']]:
+        for args in [['--modo', 'completo'], ['--disco', '/dev/sda1'], ['--etapas', '12'], ['--memoria-mb', '9999'], ['--interface', 'eth0;id'], ['--saida', 'relative'], ['--nome-dns', '-bad'], ['--modo'], ['--unknown'], ['--perfil', 'invalido'], ['--condicao', 'invalida']]:
             with self.subTest(args=args):
                 result = subprocess.run(['bash', str(SCRIPT), *args], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 2, result.stderr)
@@ -39,7 +39,7 @@ class Tests(unittest.TestCase):
     def test_version(self):
         r = subprocess.run(['bash', str(SCRIPT), '--versao'], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), 'validar-servidor 1.2.0')
+        self.assertEqual(r.stdout.strip(), 'validar-servidor 1.3.0')
 
     def test_journal_failure_is_not_server_failure(self):
         (self.root/'journal').write_text('Failed to parse timestamp\n')
@@ -112,6 +112,11 @@ failed_details
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), SCRIPT.read_bytes())
         self.assertTrue((prefix/'share/doc/validar-servidor/MANUAL_USO_VALIDAR_SERVIDOR.txt').exists())
+        helper = prefix/'share/validar-servidor/diagnostico-1.3.0.py'
+        self.assertEqual(helper.read_bytes(), SCRIPT.with_name('diagnostico.py').read_bytes())
+        r = self.bash('source "$TEST_ROOT/installed/sbin/validar-servidor"; REPORT=$TEST_REPORT; finish')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('DIAGNÓSTICO PRÁTICO', r.stdout)
 
     def test_smart_bitmask(self):
         r = self.bash('for pair in 0:COLETADO 4:ATENCAO 8:FALHA 16:FALHA 64:ATENCAO 128:ATENCAO 124:INCONCLUSIVO; do classify smart "${pair%%:*}" /dev/null; [[ $STATUS == "${pair#*:}" ]] || exit 9; done')
@@ -233,13 +238,44 @@ progress_line 2 0 3600
     def test_full_report_is_printed_without_truncation(self):
         evidence = ''.join(f'evidencia {i}\n' for i in range(200))
         (self.report/'logs/001.txt').write_text(evidence)
-        r = self.bash('STAGE=5; record OK Disco passou logs/001.txt 0; finish')
+        r = self.bash('FULL_REPORT=1; STAGE=5; record OK Disco passou logs/001.txt 0; finish')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(evidence, r.stdout)
         self.assertIn('===== ETAPA 5 =====', r.stdout)
         self.assertIn('===== Disco =====', r.stdout)
         self.assertNotIn('\x1b', r.stdout)
         self.assertNotIn('\x1b', (self.report/'RELATORIO_COMPLETO.txt').read_text())
+
+    def test_default_report_is_practical(self):
+        (self.report/'logs/raw.txt').write_text('MARCADOR_EXCLUSIVO_LOG_BRUTO')
+        r = self.bash('STAGE=1; record OK exemplo passou; finish')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('DIAGNÓSTICO PRÁTICO', r.stdout)
+        self.assertNotIn('MARCADOR_EXCLUSIVO_LOG_BRUTO', r.stdout)
+        self.assertIn('MARCADOR_EXCLUSIVO_LOG_BRUTO', (self.report/'RELATORIO_COMPLETO.txt').read_text())
+
+    def test_diagnosis_failure_is_not_approval(self):
+        r = self.bash('python3() { return 1; }; finish')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('diagnóstico prático indisponível', r.stdout)
+        self.assertEqual((self.report/'diagnostico-status.txt').read_text().strip(), '1')
+
+    def test_hardware_profile_omits_phone_checks(self):
+        r = self.bash('''
+EFFECTIVE_PROFILE=hardware
+run() { LAST_RC=1; printf '%s\\n' "$*"; }
+step7
+''')
+        self.assertNotIn('systemctl is-active asterisk', r.stdout)
+        self.assertIn('Telefonia não exigida', r.stdout)
+
+    def test_ipbx_profile_checks_asterisk(self):
+        r = self.bash('''
+EFFECTIVE_PROFILE=ipbx
+run() { LAST_RC=1; printf '%s\\n' "$*"; }
+step7
+''')
+        self.assertIn('systemctl is-active asterisk', r.stdout)
 
     def test_report(self):
         r = self.bash('STAGE=1; record OK exemplo passou; STAGE=2; skip opcional desabilitado; finish')

@@ -1,78 +1,81 @@
-# Validação de servidores Debian 11 — v1.2.0
+# Validação de servidores Debian 11 — v1.3.0
 
-Execute como **root**. Disco padrão: `/dev/sda` (disco inteiro).
+Execute como **root**. SSD/HD SATA: selecione o disco inteiro (`/dev/sda`).
 
 ## Instalar
 
 ```bash
-apt-get update && apt-get install -y git ca-certificates
+apt-get update && apt-get install -y git ca-certificates python3
 git clone --branch master https://github.com/Lucasuimaraes/teste_saude_ssd.git /opt/teste_saude_ssd
 bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
-/usr/local/sbin/validar-servidor --instalar-dependencias
+validar-servidor --instalar-dependencias
 ```
-
-Se a pasta já existe, use a atualização. Pare se algum comando falhar.
 
 ## Atualizar
 
-Aguarde os testes terminarem. O instalador guarda backup da versão anterior.
+Sem teste em andamento. O instalador preserva o script anterior.
 
 ```bash
 git -C /opt/teste_saude_ssd pull --ff-only && bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
-/usr/local/sbin/validar-servidor --versao
+validar-servidor --instalar-dependencias
+validar-servidor --versao
 ```
 
-## Executar
+## Testar
 
-Consulta, sem stress:
+Consulta sem carga:
 
 ```bash
-/usr/local/sbin/validar-servidor --modo consulta --disco /dev/sda
+validar-servidor --modo consulta --disco /dev/sda
 ```
 
-Teste completo: **somente em manutenção e com backup confirmado**.
+Completo, **em manutenção e com backup confirmado**:
 
 ```bash
-/usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --cliente "Nome do cliente" --tecnico "Lucas"
+validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --cliente "Cliente" --tecnico "Lucas"
 ```
 
-## Acompanhamento e relatório
+Acrescente conforme a máquina:
 
-- Contador ao vivo: tempo decorrido, restante estimado e limite em `HH:MM:SS`.
-- Duração desconhecida: aparece “Duração variável”. Limite não é previsão de término.
-- SMART: atualização visual a cada segundo e consulta ao disco a cada 15 segundos.
-- Relatório completo aparece ao finalizar, com seções e cores no terminal.
-- Verde: OK. Amarelo: atenção/inconclusivo. Vermelho: falha. Roxo: não executado.
-- `COLETADO` não significa aprovado. Confira as evidências e teste a telefonia.
-- Arquivos sem cores: `/var/log/validacao-servidor/<execução>/RESUMO.txt` e `RELATORIO_COMPLETO.txt`.
-- Para reler: `less /var/log/validacao-servidor/<execução>/RELATORIO_COMPLETO.txt` (substitua `<execução>` pela pasta mostrada).
-- `Ctrl+C` interrompe os comandos e salva relatório parcial; SMART no firmware pode continuar.
-
-## Selecionar testes
-
-| Etapa | Teste |
+| Opção | Uso |
 |---|---|
-| 1 | Hardware, CPU/RAM, memtester e SMART |
-| 2 | Placas de rede, ping e DNS |
-| 3 | CPU |
-| 4 | Memória |
-| 5 | Disco e autoteste SMART |
-| 6 | Logs |
-| 7 | Serviços e Asterisk |
-| 8 | Rotas, IPs e firewall |
-| 9 | Hora e NTP |
-| 10 | Sistema |
-| 11 | Stress adicional de CPU, RAM e disco |
+| `--perfil hardware` | Máquina sem telefonia instalada |
+| `--perfil ipbx` | Exige verificação do Asterisk para entrega com Ironvox |
+| `--perfil auto` | Padrão: exige telefonia se o executável Asterisk existe |
+| `--condicao nova` | Nova, conforme informado pelo técnico |
+| `--condicao usada` | Já utilizada |
+| `--condicao energia` | Histórico informado de picos/quedas de energia |
+| `--memoria-mb 2048` | Teto de RAM por teste; padrão 1024, máximo 4096 MiB |
+| `--etapas 1,5,11` | Executa somente as etapas indicadas; diagnóstico geral fica pendente se faltar cobertura |
+| `--relatorio-completo` | Exibe também todos os logs no final |
 
-Acrescente `--etapas 1,5,11` para selecionar etapas. Carga exige modo completo.
+A condição informada não muda a duração nem comprova defeito.
 
-Segunda placa (substitua interface e IP; conecte cabo e configure IP antes):
+## O relatório responde
 
-```bash
-/usr/local/sbin/validar-servidor --etapas 2 --interface eth1 --alvo-rede eth1=192.168.1.1
-```
+- **Pode liberar?** Conclusão com bloqueios e pendências; aprovação final continua técnica.
+- **O que resolver?** Ações por prioridade, acompanhadas da evidência.
+- **Quanto foi usada?** Tempo ligada nesta sessão, último boot e horas acumuladas do disco, quando informadas.
+- **Quantas vezes ligou?** Boots/desligamentos do wtmp atual e ciclos de alimentação do disco, separados.
+- **RAM passou?** Resultado, quantidade alocada quando extraível e limite da cobertura.
+- **Disco precisa de troca?** Distingue falha SMART/mídia, setores históricos e erros de cabo/porta.
+- **Há urgência?** Falhas de carga, refrigeração, erros novos e falta de espaço.
 
-Vazão: rode `iperf3 -s` em outro equipamento e acrescente `--iperf-servidor IP` ao modo completo.
+Horas altas não condenam disco. Desligamentos inesperados não provam pico elétrico.
+Campos não suportados aparecem como indisponíveis; não se inventa percentual de vida útil.
+O teste de RAM cobre a região alocada, não todos os módulos individualmente.
 
-Ajuda: `validar-servidor --ajuda`. [Manual direto em TXT](MANUAL_USO_VALIDAR_SERVIDOR.txt).
-Relatórios de clientes devem ficar fora deste repositório público.
+## Arquivos
+
+Em `/var/log/validacao-servidor/<execução>/`:
+
+- `DIAGNOSTICO.txt`: resultado prático exibido na tela, com cores no terminal.
+- `RESUMO.txt`: resultados de todos os comandos.
+- `RELATORIO_COMPLETO.txt`: comandos e logs coletados.
+
+O contador ao vivo continua em HH:MM:SS. `Ctrl+C` salva diagnóstico parcial.
+Não publique relatórios de clientes neste repositório.
+
+[Manual direto](MANUAL_USO_VALIDAR_SERVIDOR.txt) · [Exemplo simulado](EXEMPLO_DIAGNOSTICO.txt) · [Histórico](CHANGELOG.md)
+
+Testes locais: `python3 -m unittest discover -s validacao-servidor -p 'test_*.py'`.

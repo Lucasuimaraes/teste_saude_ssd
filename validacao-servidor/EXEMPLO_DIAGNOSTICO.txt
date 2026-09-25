@@ -1,0 +1,52 @@
+EXEMPLO SIMULADO — não é laudo de máquina real.
+
+DIAGNÓSTICO PRÁTICO DO SERVIDOR — v1.3.0
+Cliente: Bancada | Técnico: Lucas
+Host: BANCADA-EXEMPLO | Perfil: hardware | Condição informada: usada
+Início: 2026-09-25 13:00:00 -03:00 | Fim: 2026-09-25 14:00:00 -03:00
+
+===== CONCLUSÃO =====
+LIBERAÇÃO PENDENTE — resolver alertas ou completar a validação.
+
+===== O QUE RESOLVER PRIMEIRO =====
+[ATENCAO] /dev/sda: Erros de comunicação SATA: 12; sem comparação válida nesta rodada.
+  Ação: Revisar cabo/porta SATA e alimentação; repetir e verificar se o contador aumenta. Não condenar o SSD/HD apenas por CRC.
+  Evidência: smart-sda-inicial.json
+
+===== TEMPO DE USO E ENERGIA =====
+Máquina ligada nesta sessão (no início da rodada): 2 dias, 03h 10min
+Última inicialização: 2026-09-23 09:50:00
+RAM instalada disponível ao sistema: 8192 MiB
+Histórico de inicializações/desligamentos: não disponível.
+Esses registros cobrem somente o wtmp atual; não são o total de vida da máquina.
+Horas de atividade humana e total histórico de uso da máquina: não mensuráveis por esta coleta.
+===== HD / SSD =====
+/dev/sda: Modelo simulado | Série: TEST-001
+  Uso acumulado do disco: 20.000 horas (833 dias, 08h 00min). Não equivale à idade desde a fabricação.
+  Ciclos de alimentação do disco: 180. Não é contagem de boots do sistema.
+  Desligamentos inesperados informados pelo disco: Não disponível.
+  Temperatura atual do disco: 35 °C.
+  Vida útil restante em %: não estimada sem interpretação específica validada para o modelo.
+  Saúde SMART: sem alarme geral; não substitui os testes.
+  Setores realocados: Não disponível.
+  Erros de comunicação SATA: 12.
+  Fonte dos dados: smart-sda-inicial.json
+  Autoteste curto desta rodada: PASSOU.
+===== RESULTADO DOS TESTES =====
+Memória RAM (memtester): PASSOU nos testes executados.
+  Cobertura solicitada: Memtester 1024MiB, 2 passagens. Apenas a região alocada foi testada; não todos os módulos individualmente.
+  RAM efetivamente alocada pelo memtester: 1024 MiB (12.5% da RAM disponível ao SO).
+CPU / carga inicial: PASSOU nos testes executados.
+CPU / carga adicional: PASSOU nos testes executados.
+RAM / carga adicional: PASSOU nos testes executados.
+Disco / escrita em arquivo: PASSOU nos testes executados.
+Maior temperatura CPU durante as cargas: 65.0 °C.
+===== REDE E SERVIÇOS =====
+Rede: 1/1 verificações de tráfego passaram.
+Telefonia: não exigida neste perfil de hardware.
+
+===== TROCA DE PEÇAS / ENTREGA =====
+Troca só com evidência específica indicada acima. Idade, horas ou ciclos isolados não condenam uma peça.
+Fonte, nobreak e picos elétricos exigem inspeção/teste externo; o script não mede a qualidade da alimentação.
+Antes de liberar: conferir backup, refrigeração, cabos e teste real de uso; para IPBX, chamadas e áudio nos dois sentidos.
+Detalhes brutos e comandos: RELATORIO_COMPLETO.txt. Resultados de cada comando: RESUMO.txt.
