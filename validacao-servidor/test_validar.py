@@ -1,4 +1,5 @@
 import os
+import pty
 import subprocess
 import tempfile
 import unittest
@@ -38,7 +39,7 @@ class Tests(unittest.TestCase):
     def test_version(self):
         r = subprocess.run(['bash', str(SCRIPT), '--versao'], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), 'validar-servidor 1.1.0')
+        self.assertEqual(r.stdout.strip(), 'validar-servidor 1.2.0')
 
     def test_journal_failure_is_not_server_failure(self):
         (self.root/'journal').write_text('Failed to parse timestamp\n')
@@ -182,6 +183,63 @@ smart_short /dev/sda
 [[ $LAST_STATUS == OK ]]
 ''')
         self.assertEqual(r.returncode, 0, r.stdout+r.stderr)
+
+    def test_duration_and_estimates(self):
+        r = self.bash('''
+[[ $(clock_time 3661) == 01:01:01 ]] || exit 1
+estimate_seconds stress-ng --cpu 0 --timeout 120s; [[ $ESTIMATE == 120 ]] || exit 2
+estimate_seconds memtester 1024M 2; [[ $ESTIMATE == 0 ]] || exit 3
+estimate_seconds iperf3 -c 127.0.0.1 -t 30; [[ $ESTIMATE == 30 ]] || exit 4
+progress_line 10 120 150
+progress_line 125 120 150
+progress_line 2 0 3600
+''')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('Restante estimado: 00:01:50', r.stdout)
+        self.assertIn('Previsão atingida; aguardando término', r.stdout)
+        self.assertIn('Duração variável | Limite: 01:00:00', r.stdout)
+        self.assertNotIn('\x1b', r.stdout)
+
+    def test_live_counter_in_terminal(self):
+        master, slave = pty.openpty()
+        try:
+            env = dict(os.environ, TERM='xterm', SCRIPT=str(SCRIPT), TEST_REPORT=str(self.report))
+            proc = subprocess.Popen(['bash', '-c',
+                'source "$SCRIPT"; REPORT=$TEST_REPORT; run contador coleta 8 sleep 2.2'],
+                stdout=slave, stderr=slave, env=env)
+            os.close(slave)
+            slave = None
+            proc.wait(timeout=10)
+            output = bytearray()
+            while True:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+            self.assertEqual(proc.returncode, 0)
+            text = output.decode()
+            self.assertIn('Decorrido: 00:00:00', text)
+            self.assertIn('Decorrido: 00:00:01', text)
+            self.assertIn('Decorrido: 00:00:02', text)
+            self.assertIn('\r\x1b[2K', text)
+        finally:
+            if slave is not None:
+                os.close(slave)
+            os.close(master)
+
+    def test_full_report_is_printed_without_truncation(self):
+        evidence = ''.join(f'evidencia {i}\n' for i in range(200))
+        (self.report/'logs/001.txt').write_text(evidence)
+        r = self.bash('STAGE=5; record OK Disco passou logs/001.txt 0; finish')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(evidence, r.stdout)
+        self.assertIn('===== ETAPA 5 =====', r.stdout)
+        self.assertIn('===== Disco =====', r.stdout)
+        self.assertNotIn('\x1b', r.stdout)
+        self.assertNotIn('\x1b', (self.report/'RELATORIO_COMPLETO.txt').read_text())
 
     def test_report(self):
         r = self.bash('STAGE=1; record OK exemplo passou; STAGE=2; skip opcional desabilitado; finish')

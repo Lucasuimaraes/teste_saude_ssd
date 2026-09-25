@@ -1,13 +1,8 @@
-# Validação de servidores Debian 11
+# Validação de servidores Debian 11 — v1.2.0
 
-Script por etapas para servidores com SSD ou HD SATA. Coleta hardware, rede,
-SMART, logs, serviços e sincronismo; os testes de carga são habilitados em manutenção.
-Os relatórios ficam no próprio servidor. Todos os comandos abaixo são para **root**.
+Execute como **root**. Disco padrão: `/dev/sda` (disco inteiro).
 
-## Instalar diretamente no servidor
-
-O repositório é público: não exige conta GitHub, token ou que o computador do Lucas esteja ligado.
-É necessário acesso HTTPS ao GitHub e repositórios APT funcionando para instalar dependências.
+## Instalar
 
 ```bash
 apt-get update && apt-get install -y git ca-certificates
@@ -16,78 +11,68 @@ bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
 /usr/local/sbin/validar-servidor --instalar-dependencias
 ```
 
-Se a pasta já contiver este clone, use a seção de atualização. Se algum comando
-falhar, corrija a causa antes de continuar. O instalador salva uma cópia do script anterior.
+Se a pasta já existe, use a atualização. Pare se algum comando falhar.
 
-## Executar
+## Atualizar
 
-Consulta, sem stress (padrão):
-
-```bash
-/usr/local/sbin/validar-servidor --modo consulta --disco /dev/sda
-```
-
-Todas as etapas, com carga, **somente em manutenção**:
-
-```bash
-/usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda
-```
-
-O modo completo não supera pré-requisitos ausentes: sensor, cabo, IP, espaço ou
-destino de teste. O relatório distingue dados coletados, testes aprovados e pendências.
-Um comando terminar não significa que todo o servidor foi aprovado.
-
-## Rede: segunda placa e iperf3
-
-Uma placa sem cabo não pode ser validada por tráfego. Conecte-a ao switch e configure
-um IP adequado antes do teste. Não é preciso criar uma segunda rota default para
-testar um equipamento na rede local:
-
-```bash
-/usr/local/sbin/validar-servidor --etapas 2 --interface eth1 --alvo-rede eth1=192.168.1.1
-```
-
-Troque os nomes/IPs pelos reais. Para vazão, em **outro equipamento** da rede execute
-`iperf3 -s`. Depois, no servidor em manutenção:
-
-```bash
-/usr/local/sbin/validar-servidor --etapas 2 --modo completo --confirmar-manutencao --iperf-servidor 192.168.1.10
-```
-
-O validador não altera IPs, rotas, firewall ou serviços para fazer os testes passarem.
-
-## Atualizar um servidor instalado
+Aguarde os testes terminarem. O instalador guarda backup da versão anterior.
 
 ```bash
 git -C /opt/teste_saude_ssd pull --ff-only && bash /opt/teste_saude_ssd/validacao-servidor/instalar.sh
 /usr/local/sbin/validar-servidor --versao
 ```
 
-Não atualize enquanto uma rodada estiver em andamento. A atualização baixa a
-versão da branch `master`, instala a cópia e guarda backup da anterior. Não executa
-stress nem instala pacotes automaticamente. Se houver mudanças locais ou conflito,
-o Git pode interromper a atualização; preserve e revise suas alterações.
+## Executar
 
-## Relatórios e documentação
-
-- Saída: `/var/log/validacao-servidor/AAAAMMDD-HHMMSS-identificador/`.
-- Arquivos principais: `RESUMO.txt` e `RELATORIO_COMPLETO.txt`, além dos logs individuais.
-- [Manual completo em TXT](MANUAL_USO_VALIDAR_SERVIDOR.txt).
-- Manual instalado: `/usr/local/share/doc/validar-servidor/MANUAL_USO_VALIDAR_SERVIDOR.txt`.
-- Ajuda: `/usr/local/sbin/validar-servidor --ajuda`.
-- [Histórico de mudanças](CHANGELOG.md).
-
-Não envie relatórios de clientes ao repositório público: eles podem conter IPs,
-identificadores, processos e mensagens internas. Compartilhe o link do projeto para distribuir o código.
-
-## Validação do código
+Consulta, sem stress:
 
 ```bash
-bash -n validar-servidor.sh
-bash -n instalar.sh
-python3 test_validar.py
+/usr/local/sbin/validar-servidor --modo consulta --disco /dev/sda
 ```
 
-Execute dentro desta pasta. Os testes usam simulação e arquivos temporários;
-não estressam discos/RAM reais. A instalação pode ser testada com `--prefix` em
-um diretório isolado. Valide a compatibilidade no equipamento de destino antes da entrega.
+Teste completo: **somente em manutenção e com backup confirmado**.
+
+```bash
+/usr/local/sbin/validar-servidor --modo completo --confirmar-manutencao --disco /dev/sda --cliente "Nome do cliente" --tecnico "Lucas"
+```
+
+## Acompanhamento e relatório
+
+- Contador ao vivo: tempo decorrido, restante estimado e limite em `HH:MM:SS`.
+- Duração desconhecida: aparece “Duração variável”. Limite não é previsão de término.
+- SMART: atualização visual a cada segundo e consulta ao disco a cada 15 segundos.
+- Relatório completo aparece ao finalizar, com seções e cores no terminal.
+- Verde: OK. Amarelo: atenção/inconclusivo. Vermelho: falha. Roxo: não executado.
+- `COLETADO` não significa aprovado. Confira as evidências e teste a telefonia.
+- Arquivos sem cores: `/var/log/validacao-servidor/<execução>/RESUMO.txt` e `RELATORIO_COMPLETO.txt`.
+- Para reler: `less /var/log/validacao-servidor/<execução>/RELATORIO_COMPLETO.txt` (substitua `<execução>` pela pasta mostrada).
+- `Ctrl+C` interrompe os comandos e salva relatório parcial; SMART no firmware pode continuar.
+
+## Selecionar testes
+
+| Etapa | Teste |
+|---|---|
+| 1 | Hardware, CPU/RAM, memtester e SMART |
+| 2 | Placas de rede, ping e DNS |
+| 3 | CPU |
+| 4 | Memória |
+| 5 | Disco e autoteste SMART |
+| 6 | Logs |
+| 7 | Serviços e Asterisk |
+| 8 | Rotas, IPs e firewall |
+| 9 | Hora e NTP |
+| 10 | Sistema |
+| 11 | Stress adicional de CPU, RAM e disco |
+
+Acrescente `--etapas 1,5,11` para selecionar etapas. Carga exige modo completo.
+
+Segunda placa (substitua interface e IP; conecte cabo e configure IP antes):
+
+```bash
+/usr/local/sbin/validar-servidor --etapas 2 --interface eth1 --alvo-rede eth1=192.168.1.1
+```
+
+Vazão: rode `iperf3 -s` em outro equipamento e acrescente `--iperf-servidor IP` ao modo completo.
+
+Ajuda: `validar-servidor --ajuda`. [Manual direto em TXT](MANUAL_USO_VALIDAR_SERVIDOR.txt).
+Relatórios de clientes devem ficar fora deste repositório público.

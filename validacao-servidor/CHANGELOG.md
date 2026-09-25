@@ -1,5 +1,13 @@
 # Histórico
 
+## 1.2.0
+
+- Contador ao vivo em HH:MM:SS, estimativa por comando e limite separado.
+- Contagem durante a espera do autoteste SMART.
+- Relatório completo exibido ao finalizar, com títulos, cores e resultados por etapa.
+- Arquivos de relatório sem códigos de cor; suporte a NO_COLOR.
+- Manual e README reduzidos, com comandos diretos para root.
+
 ## 1.1.0
 
 - Distribuição pelo GitHub, instalador com backup e instruções de atualização.

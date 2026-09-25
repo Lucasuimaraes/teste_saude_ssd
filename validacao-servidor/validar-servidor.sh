@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Validação sequencial de servidores Debian 11 — v1.1.0
+# Validação sequencial de servidores Debian 11 — v1.2.0
 # Não executa testes de carga sem --modo completo --confirmar-manutencao.
 # Não formata discos, não altera rede/firewall e não reinicia serviços.
 set -uo pipefail
 export LC_ALL=C
 umask 077
 
-VERSION=1.1.0
+VERSION=1.2.0
 MODE=consulta
 CONFIRM=0
 INSTALL=0
@@ -125,15 +125,79 @@ parse_args() {
     done
 }
 
+# Cores somente em terminal; arquivos e redirecionamentos ficam sem ANSI.
+color_enabled() { [[ -t 1 && ${TERM:-dumb} != dumb && ! ${NO_COLOR+x} ]]; }
+paint() {
+    local code=$1; shift
+    if color_enabled; then printf '\033[%sm%s\033[0m\n' "$code" "$*"
+    else printf '%s\n' "$*"; fi
+}
+status_color() {
+    case $1 in
+        OK) printf 32 ;; FALHA) printf '1;31' ;;
+        ATENCAO|INCONCLUSIVO) printf '1;33' ;;
+        NAO_EXECUTADO) printf 35 ;; *) printf 36 ;;
+    esac
+}
+heading() { paint '1;36' "$(printf '=%.0s' {1..72})"; paint '1;36' "$*"; paint '1;36' "$(printf '=%.0s' {1..72})"; }
+clock_time() { local n=$1; ((n < 0)) && n=0; printf '%02d:%02d:%02d' "$((n/3600))" "$((n%3600/60))" "$((n%60))"; }
+# Zero significa duração desconhecida, nunca uma previsão baseada no timeout.
+estimate_seconds() {
+    local cmd=${1##*/} previous= arg count=0
+    shift
+    ESTIMATE=0
+    for arg in "$@"; do
+        case "$cmd:$previous" in
+            stress-ng:--timeout) [[ $arg =~ ^([0-9]+)s$ ]] && ESTIMATE=${BASH_REMATCH[1]} ;;
+            iperf3:-t) [[ $arg =~ ^[0-9]+$ ]] && ESTIMATE=$arg ;;
+            ping:-c) [[ $arg =~ ^[0-9]+$ ]] && count=$arg ;;
+        esac
+        previous=$arg
+    done
+    # Pings desta rotina usam o intervalo padrão de um segundo.
+    if [[ $cmd == ping ]] && ((count > 0)); then ESTIMATE=$count; fi
+    [[ $cmd == iostat ]] && ESTIMATE=10
+    [[ $cmd == top ]] && ESTIMATE=4
+    return 0
+}
+progress_line() {
+    local elapsed=$1 estimate=$2 limit=$3 message
+    message="Decorrido: $(clock_time "$elapsed")"
+    if ((estimate > elapsed)); then
+        message+=" | Restante estimado: $(clock_time "$((estimate-elapsed))")"
+    elif ((estimate > 0)); then
+        message+=' | Previsão atingida; aguardando término'
+    else message+=' | Duração variável'; fi
+    message+=" | Limite: $(clock_time "$limit")"
+    if [[ -t 1 && ${TERM:-dumb} != dumb ]]; then printf '\r\033[2K%s' "$message"
+    else printf '%s\n' "$message"; fi
+}
+progress_end() { [[ ! -t 1 || ${TERM:-dumb} == dumb ]] || printf '\n'; }
+show_report() {
+    local line code
+    heading 'RELATÓRIO COMPLETO DA VALIDAÇÃO'
+    while IFS= read -r line || [[ -n $line ]]; do
+        code=0
+        case $line in
+            '====='*|'VALIDAÇÃO DE SERVIDOR'*|'RESULTADOS POR ETAPA'*|'PENDÊNCIAS MANUAIS'*|'COMANDOS EXECUTADOS'*) code='1;36' ;;
+            '[FALHA]'*|'RESULTADO: EXECUÇÃO INCOMPLETA.'*) code='1;31' ;;
+            '[ATENCAO]'*|'[INCONCLUSIVO]'*|'RESULTADO: REVISÃO'*) code='1;33' ;;
+            '[OK]'*) code=32 ;; '[NAO_EXECUTADO]'*) code=35 ;;
+            '[COLETADO]'*|'[INFO]'*) code=36 ;;
+        esac
+        paint "$code" "$line"
+    done < "$REPORT/RELATORIO_COMPLETO.txt"
+}
+
 record() {
     local status=$1 title=$2 details=${3:-} logfile=${4:-} rc=${5:--}
     details=${details//$'\n'/ }; details=${details//$'\t'/ }
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$STAGE" "$status" "$title" "$rc" "$details" "$logfile" >> "$REPORT/resultados.tsv"
-    printf '[%s] %s — %s\n' "$status" "$title" "$details"
+    paint "$(status_color "$status")" "[$status] $title — $details"
     LAST_STATUS=$status
 }
 skip() { record NAO_EXECUTADO "$1" "$2"; }
-stage() { STAGE=$1; printf '\n===== ETAPA %s — %s =====\n' "$1" "$2"; }
+stage() { STAGE=$1; printf '\n'; heading "ETAPA $1 — $2"; }
 selected() { [[ ,$STEPS, == *,$1,* ]]; }
 
 # Exit codes SMART são bitmask, não o código genérico de uma falha de disco.
@@ -246,7 +310,7 @@ watch_load() {
 }
 
 run() {
-    local title=$1 policy=$2 limit=$3 rc marker started
+    local title=$1 policy=$2 limit=$3 rc marker started estimate elapsed last_tick=-1
     shift 3
     SEQ=$((SEQ + 1)); LAST_RC=127; LAST_STATUS=NAO_EXECUTADO
     printf -v LAST_LOG '%s/logs/%03d_etapa_%02d.txt' "$REPORT" "$SEQ" "$STAGE"
@@ -254,14 +318,27 @@ run() {
         skip "$title" "Ferramenta ausente: $1"; return 0
     fi
     marker="$REPORT/.interromper-$SEQ"
-    printf '\nExecutando: %s (limite %ss)\n' "$title" "$limit"
+    estimate_seconds "$@"; estimate=$ESTIMATE
+    printf '\n'; paint '1;36' "Executando: $title"
+    if ((estimate > 0)); then
+        printf 'Duração estimada: %s | Fim previsto: %s\n' "$(clock_time "$estimate")" "$(date -d "+$estimate seconds" '+%H:%M:%S')"
+    else printf 'Duração variável; limite máximo: %s\n' "$(clock_time "$limit")"; fi
     { printf 'Título: %s\nInício: %s\nComando: ' "$title" "$(date -Is)"; printf '%q ' "$@"; printf '\n'; } >> "$REPORT/comandos.txt"
     started=$SECONDS
     # Grupo isolado permite interromper também os subprocessos do teste.
     setsid timeout --signal=TERM --kill-after=10s "${limit}s" "$@" > "$LAST_LOG" 2>&1 &
     ACTIVE=$!
     if [[ $policy == carga ]]; then watch_load "$ACTIVE" "$marker" & WATCHER=$!; fi
+    while kill -0 "$ACTIVE" 2>/dev/null; do
+        elapsed=$((SECONDS-started))
+        if [[ -t 1 ]] || ((last_tick < 0 || elapsed-last_tick >= 10)); then
+            progress_line "$elapsed" "$estimate" "$limit"; last_tick=$elapsed
+        fi
+        sleep 1
+    done
     wait "$ACTIVE"; rc=$?
+    progress_line "$((SECONDS-started))" "$estimate" "$limit"
+    progress_end
     # Elimina descendentes remanescentes somente no grupo isolado deste comando.
     kill -KILL -- "-$ACTIVE" 2>/dev/null || true
     ACTIVE=
@@ -278,7 +355,7 @@ run() {
         ABORT_LOAD=1
         DETAIL+=' As próximas cargas foram bloqueadas por precaução.'
     fi
-    record "$STATUS" "$title" "$DETAIL Duração: $((SECONDS - started))s." "${LAST_LOG#"$REPORT/"}" "$rc"
+    record "$STATUS" "$title" "$DETAIL Duração: $(clock_time "$((SECONDS - started))")." "${LAST_LOG#"$REPORT/"}" "$rc"
     if [[ $STATUS == FALHA || $STATUS == ATENCAO || $STATUS == INCONCLUSIVO ]]; then
         printf 'Evidência: %s\nÚltimas linhas do comando:\n' "$LAST_LOG"
         tail -n 6 "$LAST_LOG"
@@ -297,10 +374,11 @@ stop_children() {
     fi
 }
 finish() {
-    local exit_code=$? file
+    local exit_code=$? file log_title
     ((FINISHED)) && return
     FINISHED=1
     stop_children
+    progress_end
     [[ -d $REPORT ]] || return
     if [[ -n $WORKDIR && -d $WORKDIR ]]; then
         rmdir -- "$WORKDIR" 2>/dev/null || record ATENCAO 'Arquivos temporários' "Restaram arquivos em $WORKDIR; revisar e remover manualmente."
@@ -324,7 +402,7 @@ finish() {
             awk -F '\t' 'NR>1 && $2>m {m=$2} END {if(m>0) printf "Maior temperatura CPU amostrada: %.1f °C\n",m/1000; else print "Temperatura CPU máxima: não disponível"}' "$REPORT/temperatura_memoria.tsv"
         fi
         printf '\nRESULTADOS POR ETAPA\n'
-        awk -F '\t' 'NR>1 {printf "Etapa %s | %s | %s | %s | log: %s\n",$1,$2,$3,$5,$6}' "$REPORT/resultados.tsv"
+        awk -F '\t' 'NR>1 {if ($1!=stage) {stage=$1; printf "\n===== ETAPA %s =====\n",stage} printf "[%s] %s\n  %s\n",$2,$3,$5; if ($6!="") printf "  Evidência: %s\n",$6}' "$REPORT/resultados.tsv"
         printf '\nPENDÊNCIAS MANUAIS\n- Conferir backup e teste de restauração.\n- Testar chamadas, áudio nos dois sentidos, transferência, filas e gravação.\n- Confirmar nobreak, cabeamento e ventilação.\n- Revisar atualizações e cobertura de segurança do Debian 11.\n- Registrar aprovação final e assinatura do técnico.\n'
         printf '\nExceções: mensagem EXT4 de remontagem com errors=remount-ro e link SATA 3 Gb/s, isoladamente, não são tratados como defeitos. Os logs brutos são preservados. Erros reais EXT4/I/O não são ocultados.\n'
     } > "$REPORT/RESUMO.txt"
@@ -333,10 +411,12 @@ finish() {
         printf '\nCOMANDOS EXECUTADOS\n'; cat "$REPORT/comandos.txt"
         for file in "$REPORT"/logs/*.txt; do
             [[ -f $file ]] || continue
-            printf '\n===== %s =====\n' "${file##*/}"
+            log_title=$(awk -F '\t' -v f="logs/${file##*/}" 'NR>1 && $6==f {print $3; exit}' "$REPORT/resultados.tsv")
+            printf '\n===== %s =====\nArquivo: %s\n' "${log_title:-${file##*/}}" "${file##*/}"
             cat "$file"
         done
     } > "$REPORT/RELATORIO_COMPLETO.txt"
+    show_report
     printf '\nRelatórios salvos em: %s\nResumo: %s/RESUMO.txt\n' "$REPORT" "$REPORT"
 }
 
@@ -484,7 +564,7 @@ selftest_code() {
     sed -n 's/.*Self-test execution status:[[:space:]]*([[:space:]]*\([0-9][0-9]*\)).*/\1/p' "$1" | head -n 1
 }
 smart_short() {
-    local disk=$1 code deadline
+    local disk=$1 code deadline smart_started smart_estimate=0 minutes tick
     [[ $MODE == completo ]] || { skip "Autoteste curto $disk" 'Exige modo completo.'; return; }
     ((ABORT_LOAD)) && { skip "Autoteste curto $disk" 'Bloqueado após alerta crítico anterior.'; return; }
     run "Capacidades/autoteste atual $disk" smart 60 smartctl -c "$disk"
@@ -496,10 +576,19 @@ smart_short() {
     if ((LAST_RC & 7)) || ! grep -qi 'Testing has begun' "$LAST_LOG"; then
         record INCONCLUSIVO "Autoteste curto $disk" 'Início não confirmado; não declarar aprovação.'; return
     fi
+    minutes=$(sed -n 's/.*Please wait \([0-9][0-9]*\) minutes.*/\1/p' "$LAST_LOG" | head -n 1)
+    [[ $minutes =~ ^[0-9]+$ ]] && smart_estimate=$((10#$minutes * 60))
+    smart_started=$SECONDS
     deadline=$((SECONDS + 900))
     while ((SECONDS < deadline)); do
         printf 'Aguardando autoteste SMART %s (consulta a cada 15s)...\n' "$disk"
-        sleep 15
+        for ((tick=0;tick<15 && SECONDS<deadline;tick++)); do
+            if [[ -t 1 ]] || ((tick == 0)); then
+                progress_line "$((SECONDS-smart_started))" "$smart_estimate" 900
+            fi
+            sleep 1
+        done
+        progress_end
         run "Progresso autoteste $disk" smart 45 smartctl -c "$disk"
         code=$(selftest_code "$LAST_LOG")
         [[ $code =~ ^[0-9]+$ ]] || break
